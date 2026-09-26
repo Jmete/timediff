@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>TIME/DIFF — World Time Comparison</title>
+  <meta name="color-scheme" content="dark light" />
+  <link rel="icon" type="image/svg+xml" href="logo.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    // Apply the saved theme (dark by default) before first paint to avoid a flash.
+    document.documentElement.dataset.theme = localStorage.getItem('timediff.theme') || 'dark';
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 48 48" aria-hidden="true">
+        <rect class="logo-bg" x="1" y="1" width="46" height="46" rx="3" />
+        <path class="logo-hatch" d="M30 47 47 30M35 47 47 35M40 47 47 40" />
+        <circle class="logo-ring" cx="22" cy="22" r="12.5" pathLength="100" stroke-dasharray="72 6 10 12" transform="rotate(-78 22 22)" />
+        <path class="logo-hand" d="M22 22V13.5M22 22l6.5 4" />
+        <rect class="logo-hub" x="19.5" y="19.5" width="5" height="5" />
+        <path class="logo-tick" d="M5 5h5M5 5v5" />
+        <rect class="logo-dot" x="38" y="7" width="3.5" height="3.5" />
+      </svg>
+      <div class="wordmark">
+        <span class="wm-main">TIME<span class="wm-slash">/</span>DIFF</span>
+        <span class="wm-sub">MULTI-ZONE CHRONO <span class="wm-sep">//</span> <span id="wm-count">06</span> NODES</span>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="export-btn" class="icon-btn" type="button" aria-label="Download config" title="Download config (.json)">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg>
+      </button>
+      <button id="import-btn" class="icon-btn" type="button" aria-label="Upload config" title="Upload config (.json) — or drop a file on the page">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg>
+      </button>
+      <input id="import-file" type="file" accept=".json,application/json" hidden />
+      <span class="action-sep" aria-hidden="true"></span>
+      <button id="colors-btn" class="icon-btn" type="button" aria-label="Status colors" title="Status colors">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="3" y="3" width="8" height="8" fill="currentColor" opacity=".9"/><rect x="13" y="3" width="8" height="8" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="13" width="8" height="8" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="8" height="8" fill="currentColor" opacity=".45"/></svg>
+      </button>
+      <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light / dark mode" title="Toggle light / dark">
+        <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><g stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></g></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="miter"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <div class="frame">
+      <div class="board" id="board">
+        <table class="grid" id="grid">
+          <thead><tr id="head-row"></tr></thead>
+          <tbody id="body-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="legend" id="legend"></div>
+  </main>
+
+  <button id="reset-btn" class="reset-btn" type="button" title="Reset cities, schedules and colors to defaults">
+    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.3-5.6M4 4v4h4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="square"/></svg>
+    Reset
+  </button>
+
+  <div id="cell-menu" class="cell-menu" role="menu" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="drop-zone" class="drop-zone" hidden><div><span class="kicker">IMPORT</span><strong>Drop config file to load it</strong></div></div>
+
+  <!-- Add city -->
+  <dialog id="add-dialog" class="dlg">
+    <div class="dlg-inner">
+      <div class="dlg-head">
+        <div><span class="kicker">NEW NODE</span><h2>Add a city</h2></div>
+        <button class="icon-btn ghost" type="button" data-close aria-label="Close">✕</button>
+      </div>
+      <input id="search" class="text-input search" type="search" placeholder="Search city, country or time zone…" autocomplete="off" />
+      <ul id="results" class="results" role="listbox"></ul>
+    </div>
+  </dialog>
+
+  <!-- Edit column -->
+  <dialog id="col-dialog" class="dlg">
+    <div class="dlg-inner">
+      <div class="dlg-head">
+        <div><span class="kicker" id="col-kicker">COLUMN 01</span><h2>Edit column</h2></div>
+        <button class="icon-btn ghost" type="button" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="dlg-body">
+        <label class="field">
+          <span class="field-label">Display name</span>
+          <input id="col-name" class="text-input" type="text" maxlength="40" autocomplete="off" />
+          <span class="field-hint" id="col-loc"></span>
+        </label>
+        <div class="field">
+          <span class="field-label">Header color</span>
+          <div id="col-color"></div>
+        </div>
+        <div class="field">
+          <span class="field-label">Schedule <em>· local time · tap or drag to paint</em></span>
+          <div class="brushes" id="brushes" role="radiogroup" aria-label="Paint status"></div>
+          <div class="hours" id="hours"></div>
+          <div class="row-btns">
+            <button id="sched-default" class="text-btn" type="button">Reset to 9–5 work</button>
+            <button id="sched-clear" class="text-btn" type="button">Clear all</button>
+          </div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <button id="col-remove" class="btn danger" type="button">Remove</button>
+        <span class="spacer"></span>
+        <button id="col-makeref" class="btn" type="button">Make reference</button>
+        <button class="btn primary" type="button" data-close>Done</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Status colors -->
+  <dialog id="colors-dialog" class="dlg">
+    <div class="dlg-inner">
+      <div class="dlg-head">
+        <div><span class="kicker">PALETTE</span><h2>Status colors</h2></div>
+        <button class="icon-btn ghost" type="button" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="dlg-body" id="color-rows"></div>
+      <div class="dlg-foot">
+        <button id="colors-reset" class="btn" type="button">Restore defaults</button>
+        <span class="spacer"></span>
+        <button class="btn primary" type="button" data-close>Done</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="cities.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
