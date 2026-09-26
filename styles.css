@@ -708,6 +708,22 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .hour.cat-sleep { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c) 30%, transparent) 0 1.5px, transparent 1.5px 6px); }
 .hour:hover { border-color: var(--text); }
 .row-btns { display: flex; gap: 16px; }
+.days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.day {
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.day:hover { border-color: var(--text); }
+.day.active { background: color-mix(in srgb, var(--cat-work) 30%, var(--surface)); border-color: var(--cat-work); color: var(--text); }
 
 /* Add city results */
 .results { list-style: none; margin: 0; padding: 0 10px 12px; overflow-y: auto; min-height: 120px; }

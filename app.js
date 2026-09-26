@@ -17,6 +17,10 @@
   const DEFAULT_COLORS = { work: '#3d8bff', busy: '#ff3b3b', sleep: '#7d828c', free: '#2fdc76' };
   const DEFAULT_REF_HEADER = '#c8ff00';
   const defaultSchedule = () => Array.from({ length: 24 }, (_, h) => (h >= 9 && h < 17 ? 'work' : null));
+  // Weekdays use JS numbering (0 = Sunday); the editor lists them Monday first.
+  const DAY_KEYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+  const defaultWorkDays = () => [1, 2, 3, 4, 5];
 
   const $ = (sel) => document.querySelector(sel);
   const root = document.documentElement;
@@ -192,6 +196,9 @@
     out.schedule = Array.isArray(c.schedule) && c.schedule.length === 24
       ? c.schedule.map((s) => (CAT_IDS.includes(s) ? s : null))
       : defaultSchedule();
+    out.workDays = Array.isArray(c.workDays)
+      ? [...new Set(c.workDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+      : defaultWorkDays();
     return out;
   }
 
@@ -346,7 +353,9 @@
         td.dataset.col = i;
         td.dataset.hour = p.hour;
         if (i === 0) td.classList.add('ref');
-        const cat = c.schedule[p.hour];
+        // Work hours only count on the column's work days (in its own local date).
+        let cat = c.schedule[p.hour];
+        if (cat === 'work' && !c.workDays.includes(DAY_KEYS.indexOf(p.weekday))) cat = null;
         if (cat) td.classList.add('cat', 'cat-' + cat);
 
         const t = to12h(p.hour, p.minute);
@@ -519,6 +528,7 @@
         if (c.label) col.name = c.label;
         if (c.headerColor) col.headerColor = c.headerColor;
         col.schedule = scheduleToRanges(c.schedule);
+        col.workDays = DAY_ORDER.filter((d) => c.workDays.includes(d)).map((d) => DAY_KEYS[d]);
         return col;
       }),
     };
@@ -555,6 +565,9 @@
       label: col.name || col.label,
       headerColor: col.headerColor,
       schedule: rangesToSchedule(col.schedule),
+      workDays: Array.isArray(col.workDays)
+        ? col.workDays.map((d) => DAY_KEYS.findIndex((k) => k.toLowerCase() === String(d).slice(0, 3).toLowerCase()))
+        : undefined,
     })).filter(Boolean);
     const skipped = data.columns.length - list.length;
     if (!list.length) throw new Error('No valid cities found in the file.');
@@ -785,6 +798,35 @@
   });
   window.addEventListener('pointercancel', () => { paintValue = undefined; saveCities(); });
 
+  const daysEl = $('#workdays');
+  for (const d of DAY_ORDER) {
+    const b = button('day', DAY_KEYS[d], { 'aria-pressed': 'false' });
+    b.dataset.day = d;
+    b.addEventListener('click', () => {
+      const c = editCity();
+      c.workDays = c.workDays.includes(d) ? c.workDays.filter((x) => x !== d) : [...c.workDays, d].sort();
+      saveCities(); paintDayButtons(); renderBody(new Date());
+    });
+    daysEl.append(b);
+  }
+  function paintDayButtons() {
+    const c = editCity();
+    if (!c) return;
+    daysEl.querySelectorAll('.day').forEach((b) => {
+      const on = c.workDays.includes(+b.dataset.day);
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on);
+    });
+  }
+  $('#days-weekdays').addEventListener('click', () => {
+    editCity().workDays = defaultWorkDays();
+    saveCities(); paintDayButtons(); renderBody(new Date());
+  });
+  $('#days-all').addEventListener('click', () => {
+    editCity().workDays = [0, 1, 2, 3, 4, 5, 6];
+    saveCities(); paintDayButtons(); renderBody(new Date());
+  });
+
   $('#sched-default').addEventListener('click', () => {
     editCity().schedule = defaultSchedule();
     saveCities(); paintHourButtons(); renderBody(new Date());
@@ -827,6 +869,7 @@
     $('#col-remove').disabled = cities.length <= 1;
     $('#col-makeref').hidden = i === 0;
     paintHourButtons();
+    paintDayButtons();
   }
 
   function openColDialog(i) {
