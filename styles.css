@@ -436,6 +436,19 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .legend-note .chip { margin: 0 4px 0 0; }
 .legend-hint { font-family: var(--mono); font-size: 13px; letter-spacing: .04em; color: var(--faint); }
 
+/* ---------- Credit ---------- */
+
+.credit {
+  margin-top: 14px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: .06em;
+  color: var(--faint);
+}
+.credit a { color: inherit; text-decoration: none; border-bottom: 1px solid transparent; transition: color .15s, border-color .15s; }
+.credit a:hover { color: var(--text); border-bottom-color: currentColor; }
+
 /* ---------- Reset (bottom-right corner) ---------- */
 
 .reset-btn {
