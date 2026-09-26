@@ -4,6 +4,7 @@
   const STORAGE_KEY = 'timediff.cities';
   const SETTINGS_KEY = 'timediff.settings';
   const THEME_KEY = 'timediff.theme';
+  const VIEW_KEY = 'timediff.view';
   const HOUR = 3600000;
 
   const CATEGORIES = [
@@ -276,7 +277,9 @@
       if (i < cities.length - 1) tools.append(toolBtn('Move right', 'right', i, '›', 'desk'));
       if (cities.length > 1) tools.append(toolBtn('Remove', 'remove', i, '✕', 'desk danger'));
       tools.append(toolBtn('Edit name, color & schedule', 'edit', i, ICON_EDIT, 'edit'));
-      top.append(tag, tools);
+      // Current status; only shown in the stacked mobile view, where the grid is hidden.
+      const status = el('span', 'status');
+      top.append(tag, status, tools);
 
       const name = el('div', 'name', displayName(c));
       name.title = displayName(c) + ' — click to edit';
@@ -298,7 +301,7 @@
 
       th.append(top, name, loc, clock, meta);
       headRow.append(th);
-      clockEls.push({ tz: c.tz, time, sfx, date, off });
+      clockEls.push({ c, tz: c.tz, time, sfx, date, off, status });
     });
 
     const addTh = el('th', 'add-col');
@@ -318,6 +321,13 @@
       const t = to12h(p.hour, p.minute);
       e.time.textContent = t.text;
       e.sfx.textContent = t.suffix;
+      const cat = statusAt(e.c, p) || '';
+      if (e.status.dataset.v !== cat) {
+        e.status.dataset.v = cat;
+        e.status.className = 'status' + (cat ? ' cat-' + cat : '');
+        e.status.replaceChildren();
+        if (cat) e.status.append(el('i', 'status-swatch'), catLabel(cat));
+      }
       e.date.textContent = now.toLocaleDateString('en-US', { timeZone: e.tz, weekday: 'short', month: 'short', day: 'numeric' });
       const offText = formatOffset(offsetMinutes(e.tz, now.getTime()));
       if (e.off.dataset.v !== offText) {
@@ -346,6 +356,17 @@
     return false; // all 24 hours are work: no shift start, use the hour's own day
   }
 
+  // Status of city `c` at local time parts `p`. Work hours only count on the
+  // column's work days (in its own local date); overnight shifts count toward
+  // the day they start.
+  function statusAt(c, p) {
+    const cat = c.schedule[p.hour];
+    if (cat !== 'work') return cat;
+    let day = DAY_KEYS.indexOf(p.weekday);
+    if (shiftStartsPrevDay(c.schedule, p.hour)) day = (day + 6) % 7;
+    return c.workDays.includes(day) ? cat : null;
+  }
+
   function renderBody(now) {
     const refTz = cities[0].tz;
     const start = startOfLocalDay(now, refTz);
@@ -365,14 +386,7 @@
         td.dataset.col = i;
         td.dataset.hour = p.hour;
         if (i === 0) td.classList.add('ref');
-        // Work hours only count on the column's work days (in its own local date).
-        // Overnight shifts count toward the day they start.
-        let cat = c.schedule[p.hour];
-        if (cat === 'work') {
-          let day = DAY_KEYS.indexOf(p.weekday);
-          if (shiftStartsPrevDay(c.schedule, p.hour)) day = (day + 6) % 7;
-          if (!c.workDays.includes(day)) cat = null;
-        }
+        const cat = statusAt(c, p);
         if (cat) td.classList.add('cat', 'cat-' + cat);
 
         const t = to12h(p.hour, p.minute);
@@ -1044,6 +1058,16 @@
     const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
     root.dataset.theme = next;
     localStorage.setItem(THEME_KEY, next);
+  });
+
+  // ---------- Mobile view (hourly grid / stacked current times) ----------
+
+  $('#view-toggle').addEventListener('click', () => {
+    const next = root.dataset.view === 'stack' ? 'grid' : 'stack';
+    root.dataset.view = next;
+    localStorage.setItem(VIEW_KEY, next);
+    closeCellMenu();
+    if (next === 'grid') scrollCurrentIntoView();
   });
 
   // Sync changes made in another tab.

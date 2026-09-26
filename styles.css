@@ -134,6 +134,8 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .icon-btn.ghost { border-color: transparent; background: transparent; width: 32px; height: 32px; }
 [data-theme="dark"] .icon-sun { display: none; }
 [data-theme="light"] .icon-moon { display: none; }
+.view-toggle { display: none; }
+[data-view="stack"] .icon-stack, [data-view="grid"] .icon-grid { display: none; }
 
 /* ---------- Board ---------- */
 
@@ -220,6 +222,7 @@ main {
   letter-spacing: 0.14em;
 }
 .tag-ref { letter-spacing: 0.1em; }
+.status { display: none; }
 
 .name {
   font-size: 23px;
@@ -781,4 +784,60 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   .hours { grid-template-columns: repeat(6, 1fr); }
   .dlg-body { padding: 4px 16px 14px; }
   .dlg-foot { padding: 12px 16px; }
+
+  .view-toggle { display: grid; }
+}
+
+/* ---------- Mobile stacked view: one row per city showing only the current time ---------- */
+
+@media (max-width: 640px) {
+  [data-view="stack"] .legend { display: none; }
+  [data-view="stack"] .frame { min-height: 0; }
+  [data-view="stack"] .board { display: flex; }
+
+  /* Re-flow the header row into a vertical list that fills the board's height */
+  [data-view="stack"] .grid,
+  [data-view="stack"] .grid thead,
+  [data-view="stack"] .grid thead tr { display: flex; flex-direction: column; flex: 1 0 auto; }
+  [data-view="stack"] .grid tbody { display: none; }
+
+  [data-view="stack"] .grid thead th {
+    position: static;
+    flex: 1 0 auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "top top" "name clock" "loc meta";
+    align-content: center;
+    column-gap: 12px;
+    padding: 6px 12px 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  [data-view="stack"] .grid thead th.ref { border-bottom-color: var(--line-strong); }
+  [data-view="stack"] .th-top { grid-area: top; height: 24px; margin: 0; gap: 10px; justify-content: flex-start; }
+  [data-view="stack"] .col-tools { margin-left: auto; }
+  [data-view="stack"] .name { grid-area: name; align-self: end; }
+  [data-view="stack"] .loc { grid-area: loc; margin-top: 1px; }
+  [data-view="stack"] .clock { grid-area: clock; margin: 0; justify-self: end; align-self: end; }
+  [data-view="stack"] .clock-time { font-size: 29px; line-height: 1.1; }
+  [data-view="stack"] .meta { grid-area: meta; margin-top: 1px; flex-direction: row; gap: 8px; justify-self: end; font-size: 12px; }
+
+  [data-view="stack"] .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  [data-view="stack"] .status-swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--c); box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 35%, transparent); }
+
+  /* "+" becomes a slim full-width row at the bottom */
+  [data-view="stack"] .grid th.add-col { flex: none; display: block; width: auto; padding: 8px 12px; border-bottom: 0; }
+  [data-view="stack"] .add-btn { width: 100%; height: 38px; flex-direction: row; gap: 8px; }
+  [data-view="stack"] .add-btn span { font-size: 23px; }
+  [data-view="stack"] .add-btn small { margin-top: 0; }
 }
