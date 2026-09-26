@@ -93,7 +93,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 
-.logo { width: 42px; height: 42px; flex: none; }
+.logo { width: 48px; height: 48px; flex: none; }
 .logo-bg { fill: var(--acid); }
 .logo-hatch { stroke: #0a0b0d; stroke-width: 2; }
 .logo-ring { fill: none; stroke: #0a0b0d; stroke-width: 4; }
@@ -104,7 +104,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 
 .wordmark { display: flex; flex-direction: column; line-height: 1; }
 .wm-main {
-  font-size: 22px;
+  font-size: 27px;
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -112,7 +112,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .wm-sub {
   margin-top: 5px;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11.5px;
   letter-spacing: 0.16em;
   color: var(--muted);
 }
@@ -177,7 +177,7 @@ main {
 }
 
 .grid th, .grid td {
-  min-width: 164px;
+  min-width: 196px;
   text-align: left;
   border-right: 1px solid var(--line);
 }
@@ -210,19 +210,19 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 26px;
+  height: 28px;
   margin-bottom: 4px;
 }
 .tag {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.14em;
 }
 .tag-ref { letter-spacing: 0.1em; }
 
 .name {
-  font-size: 19px;
+  font-size: 23px;
   font-weight: 700;
   letter-spacing: -0.01em;
   line-height: 1.2;
@@ -237,7 +237,7 @@ main {
 .name:hover { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
 .loc {
   margin-top: 2px;
-  font-size: 12px;
+  font-size: 14.5px;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -252,15 +252,15 @@ main {
   gap: 6px;
   white-space: nowrap;
 }
-.clock-time { font-size: 27px; font-weight: 600; letter-spacing: -0.01em; }
-.clock-suffix { font-family: var(--mono); font-size: 12px; font-weight: 700; }
+.clock-time { font-size: 33px; font-weight: 600; letter-spacing: -0.01em; }
+.clock-suffix { font-family: var(--mono); font-size: 14.5px; font-weight: 700; }
 .meta {
   margin-top: 4px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 13px;
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
@@ -269,7 +269,7 @@ main {
   padding: 0 4px;
   border: 1px solid currentColor;
   border-radius: 2px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 13px;
   letter-spacing: 0.08em;
@@ -282,7 +282,7 @@ main {
   border: 0; border-radius: 2px;
   background: transparent;
   color: color-mix(in srgb, currentColor 55%, transparent);
-  font-size: 14px; line-height: 1;
+  font-size: 17px; line-height: 1;
 }
 thead th .mini-btn { color: inherit; opacity: .55; }
 thead th .mini-btn:hover { opacity: 1; background: color-mix(in srgb, currentColor 14%, transparent); }
@@ -305,8 +305,8 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   color: var(--muted);
   transition: all .15s;
 }
-.add-btn span { font-size: 26px; font-weight: 400; line-height: 1; }
-.add-btn small { font-family: var(--mono); font-size: 9px; letter-spacing: .14em; margin-top: 4px; }
+.add-btn span { font-size: 31.5px; font-weight: 400; line-height: 1; }
+.add-btn small { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; margin-top: 4px; }
 .add-btn:hover { border: 1px solid var(--acid); color: var(--signal-ink); background: var(--acid); }
 [data-theme="light"] .add-btn:hover { color: #0a0b0d; }
 
@@ -315,7 +315,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .grid tbody td {
   position: relative;
   padding: 0 16px;
-  height: 44px;
+  height: 52px;
   white-space: nowrap;
   border-bottom: 1px solid var(--line);
   background-color: var(--bgc, var(--surface));
@@ -343,8 +343,8 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   --pat: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c) 22%, transparent) 0 1.5px, transparent 1.5px 7px);
 }
 
-.time { font-size: 15.5px; font-weight: 600; }
-.suffix { margin-left: 5px; font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--muted); }
+.time { font-size: 19px; font-weight: 600; }
+.suffix { margin-left: 5px; font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--muted); }
 .cat-sleep .time { color: color-mix(in srgb, var(--text) 70%, transparent); }
 
 .chip {
@@ -354,7 +354,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   border: 1px solid currentColor;
   border-radius: 2px;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 700;
   font-style: normal;
   letter-spacing: 0.08em;
@@ -384,7 +384,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   padding: 0 6px;
   border-radius: 2px;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 11.5px;
   font-weight: 700;
   letter-spacing: .12em;
   line-height: 16px;
@@ -406,7 +406,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   align-items: center;
   gap: 8px 18px;
   margin: 14px 2px 0;
-  font-size: 12px;
+  font-size: 14.5px;
   color: var(--muted);
 }
 .legend-keys { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -417,7 +417,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   border-radius: var(--r);
   background: var(--surface);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: .1em;
   text-transform: uppercase;
@@ -425,13 +425,13 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 }
 .legend-item:hover { border-color: var(--c); }
 .legend-swatch {
-  width: 12px; height: 12px;
+  width: 14px; height: 14px;
   border-radius: 2px;
   background: var(--c);
 }
 .legend-note { display: inline-flex; align-items: center; gap: 2px; }
 .legend-note .chip { margin: 0 4px 0 0; }
-.legend-hint { font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; color: var(--faint); }
+.legend-hint { font-family: var(--mono); font-size: 13px; letter-spacing: .04em; color: var(--faint); }
 
 /* ---------- Reset (bottom-right corner) ---------- */
 
@@ -449,7 +449,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   background: var(--surface);
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: .12em;
   text-transform: uppercase;
@@ -473,7 +473,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   background: var(--surface-2);
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 14.5px;
   letter-spacing: .03em;
   box-shadow: var(--shadow);
   animation: toast-in .18s ease-out;
@@ -496,14 +496,14 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 }
 .drop-zone[hidden] { display: none; }
 .drop-zone div { display: flex; flex-direction: column; gap: 6px; }
-.drop-zone strong { font-size: 22px; letter-spacing: .02em; }
+.drop-zone strong { font-size: 27px; letter-spacing: .02em; }
 
 /* ---------- Cell status menu ---------- */
 
 .cell-menu {
   position: fixed;
   z-index: 40;
-  min-width: 190px;
+  min-width: 220px;
   padding: 6px;
   border: 1px solid var(--line-strong);
   border-radius: var(--r);
@@ -516,7 +516,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   margin-bottom: 4px;
   border-bottom: 1px solid var(--line);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 13px;
   letter-spacing: .06em;
 }
 .menu-name { font-weight: 700; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
@@ -528,13 +528,13 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   border: 0; border-radius: 2px;
   background: transparent;
   text-align: left;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 500;
 }
 .menu-item:hover, .menu-item:focus-visible { background: var(--hover-ov); outline: none; }
 .menu-item.active { background: color-mix(in srgb, var(--c, var(--text)) 18%, transparent); }
-.menu-item.active::after { content: "●"; margin-left: auto; font-size: 8px; color: var(--c, var(--text)); }
-.menu-item.link { font-size: 12.5px; color: var(--muted); }
+.menu-item.active::after { content: "●"; margin-left: auto; font-size: 10px; color: var(--c, var(--text)); }
+.menu-item.link { font-size: 15px; color: var(--muted); }
 .menu-item.link:hover { color: var(--text); }
 .menu-swatch { width: 14px; height: 14px; border-radius: 2px; background: var(--c); flex: none; }
 .menu-swatch.none { background: transparent; border: 1px dashed var(--faint); }
@@ -543,7 +543,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 /* ---------- Dialogs ---------- */
 
 .dlg {
-  width: min(500px, calc(100vw - 20px));
+  width: min(560px, calc(100vw - 20px));
   max-height: min(680px, calc(100dvh - 32px));
   padding: 0;
   border: 1px solid var(--line-strong);
@@ -561,12 +561,12 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 }
 .kicker {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: .16em;
   color: var(--pink);
 }
-.dlg-head h2 { margin: 3px 0 0; font-size: 20px; font-weight: 700; letter-spacing: .01em; }
+.dlg-head h2 { margin: 3px 0 0; font-size: 24.5px; font-weight: 700; letter-spacing: .01em; }
 .dlg-body { padding: 4px 20px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .dlg-foot {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -580,7 +580,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   border: 1px solid var(--line-strong);
   border-radius: var(--r);
   background: transparent;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
 }
 .btn:hover:not(:disabled) { border-color: var(--text); }
@@ -596,7 +596,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   background: transparent;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -606,14 +606,14 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .field { display: flex; flex-direction: column; gap: 8px; }
 .field-label {
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--muted);
 }
 .field-label em { font-style: normal; font-weight: 400; letter-spacing: .04em; text-transform: none; color: var(--faint); }
-.field-hint { font-size: 12px; color: var(--muted); }
+.field-hint { font-size: 14.5px; color: var(--muted); }
 
 .text-input {
   width: 100%;
@@ -623,7 +623,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   background: var(--surface-2);
   color: var(--text);
   font: inherit;
-  font-size: 15px;
+  font-size: 18.5px;
   outline: none;
 }
 .text-input:focus { border-color: var(--acid); box-shadow: 0 0 0 3px color-mix(in srgb, var(--acid) 20%, transparent); }
@@ -651,7 +651,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   border-radius: var(--r);
   background: var(--surface-2);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: 16px;
 }
 .hex-wrap:focus-within { border-color: var(--acid); }
 .hex-wrap.invalid { border-color: var(--pink); }
@@ -678,7 +678,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   border: 1px solid var(--line-strong);
   border-radius: var(--r);
   background: transparent;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 600;
 }
 .brush-swatch { width: 12px; height: 12px; border-radius: 2px; background: var(--c); }
@@ -695,15 +695,15 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .hour {
   position: relative;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  height: 44px;
+  height: 50px;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 2px;
   background: var(--surface-2);
   line-height: 1.1;
 }
-.hour .hour-n { font-size: 13px; font-weight: 700; }
-.hour small { font-family: var(--mono); font-size: 8.5px; color: var(--muted); }
+.hour .hour-n { font-size: 16px; font-weight: 700; }
+.hour small { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 .hour.cat { background: color-mix(in srgb, var(--c) 30%, var(--surface)); border-color: var(--c); }
 .hour.cat-sleep { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c) 30%, transparent) 0 1.5px, transparent 1.5px 6px); }
 .hour:hover { border-color: var(--text); }
@@ -722,11 +722,11 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .result:hover, .result:focus-visible { background: var(--hover-ov); box-shadow: inset 3px 0 0 var(--acid); outline: none; }
 .r-main, .r-side { display: flex; flex-direction: column; min-width: 0; }
 .r-side { align-items: flex-end; flex: none; }
-.r-city { font-weight: 600; font-size: 15px; }
-.r-country { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.r-time { font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.r-off { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
-.results .empty { padding: 24px; text-align: center; color: var(--muted); font-size: 14px; }
+.r-city { font-weight: 600; font-size: 18.5px; }
+.r-country { font-size: 14.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r-time { font-size: 16.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.r-off { font-family: var(--mono); font-size: 13px; color: var(--faint); }
+.results .empty { padding: 24px; text-align: center; color: var(--muted); font-size: 17px; }
 
 /* ---------- Mobile ---------- */
 
@@ -736,22 +736,22 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 
 @media (max-width: 640px) {
   .topbar { padding-top: 12px; padding-bottom: 10px; }
-  .logo { width: 36px; height: 36px; }
-  .wm-main { font-size: 19px; }
-  .wm-sub { font-size: 8.5px; }
+  .logo { width: 40px; height: 40px; }
+  .wm-main { font-size: 23px; }
+  .wm-sub { font-size: 10.5px; }
 
   main { padding-bottom: 60px; }
 
-  .grid th, .grid td { min-width: 128px; }
+  .grid th, .grid td { min-width: 150px; }
   .grid thead th { padding: 8px 12px 12px; }
-  .grid tbody td { padding: 0 12px; height: 42px; }
-  .name { font-size: 16px; }
-  .loc { font-size: 11px; }
+  .grid tbody td { padding: 0 12px; height: 48px; }
+  .name { font-size: 19.5px; }
+  .loc { font-size: 13.5px; }
   .clock { margin-top: 10px; }
-  .clock-time { font-size: 19px; }
-  .clock-suffix { font-size: 10px; }
-  .meta { font-size: 9.5px; }
-  .time { font-size: 14px; }
+  .clock-time { font-size: 23px; }
+  .clock-suffix { font-size: 12px; }
+  .meta { font-size: 11.5px; }
+  .time { font-size: 17px; }
   .chip, .now-pill { margin-left: 5px; }
 
   .grid th.add-col, .grid td.pad { min-width: 68px; width: 68px; }

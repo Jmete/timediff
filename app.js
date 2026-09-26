@@ -145,7 +145,7 @@
       if (newFallback !== undefined) fb = newFallback;
       swatch.value = v || fb;
       hex.value = v ? v.slice(1).toUpperCase() : '';
-      hex.placeholder = v ? '' : 'DEFAULT';
+      hex.placeholder = v ? '' : 'AUTO';
       hexWrap.classList.remove('invalid');
       wrap.classList.toggle('is-default', !v);
     }
