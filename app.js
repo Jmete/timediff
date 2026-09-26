@@ -334,6 +334,18 @@
 
   // ---------- Rendering: body ----------
 
+  // True when hour h continues a work shift that began the previous evening
+  // (the contiguous work run crosses midnight), so it counts toward that day.
+  function shiftStartsPrevDay(schedule, h) {
+    let crossed = false;
+    for (let k = 1; k < 24; k++) {
+      const prev = (h - k + 24) % 24;
+      if (schedule[prev] !== 'work') return crossed;
+      if (prev === 23) crossed = true;
+    }
+    return false; // all 24 hours are work: no shift start, use the hour's own day
+  }
+
   function renderBody(now) {
     const refTz = cities[0].tz;
     const start = startOfLocalDay(now, refTz);
@@ -354,8 +366,13 @@
         td.dataset.hour = p.hour;
         if (i === 0) td.classList.add('ref');
         // Work hours only count on the column's work days (in its own local date).
+        // Overnight shifts count toward the day they start.
         let cat = c.schedule[p.hour];
-        if (cat === 'work' && !c.workDays.includes(DAY_KEYS.indexOf(p.weekday))) cat = null;
+        if (cat === 'work') {
+          let day = DAY_KEYS.indexOf(p.weekday);
+          if (shiftStartsPrevDay(c.schedule, p.hour)) day = (day + 6) % 7;
+          if (!c.workDays.includes(day)) cat = null;
+        }
         if (cat) td.classList.add('cat', 'cat-' + cat);
 
         const t = to12h(p.hour, p.minute);
