@@ -309,7 +309,7 @@
     for (const e of clockEls) {
       const p = zonedParts(now, e.tz);
       const t = to12h(p.hour, p.minute);
-      e.time.textContent = t.text + ':' + String(p.second).padStart(2, '0');
+      e.time.textContent = t.text;
       e.sfx.textContent = t.suffix;
       e.date.textContent = now.toLocaleDateString('en-US', { timeZone: e.tz, weekday: 'short', month: 'short', day: 'numeric' });
       const offText = formatOffset(offsetMinutes(e.tz, now.getTime()));
