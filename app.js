@@ -5,7 +5,13 @@
   const SETTINGS_KEY = 'timediff.settings';
   const THEME_KEY = 'timediff.theme';
   const VIEW_KEY = 'timediff.view';
+  const RANGE_KEY = 'timediff.range';
+  const MENU_MODE_KEY = 'timediff.menuMode';
   const HOUR = 3600000;
+  const DAY_MS = 24 * HOUR;
+  // One-off events (mirrors EVENT_LIMITS in api/_lib/columns.js). Events are
+  // dropped a week after they end, which keeps saved and synced data small.
+  const EVENTS = { perColumn: 60, maxDays: 31, keepDays: 7, aheadDays: 730, note: 60 };
 
   const CATEGORIES = [
     { id: 'work', label: 'Work' },
@@ -75,14 +81,48 @@
     return Math.round((asUtc - Math.floor(ms / 1000) * 1000) / 60000);
   }
 
-  // UTC instant of local midnight (today) in `tz`.
-  function startOfLocalDay(now, tz) {
-    const p = zonedParts(now, tz);
-    const guess = Date.UTC(p.year, p.month - 1, p.day);
-    let utc = guess - offsetMinutes(tz, guess) * 60000;
-    utc = guess - offsetMinutes(tz, utc) * 60000;
+  // Calendar dates are handled as "civil" ms: UTC midnight of that date, so
+  // day arithmetic is plain addition and never trips over DST.
+  function civilDay(date, tz) {
+    const p = zonedParts(date, tz);
+    return Date.UTC(p.year, p.month - 1, p.day);
+  }
+
+  // UTC instant of a wall-clock time in `tz`, given as Date.UTC(y, m, d, h, min).
+  function localToUtc(tz, wall) {
+    let utc = wall - offsetMinutes(tz, wall) * 60000;
+    utc = wall - offsetMinutes(tz, utc) * 60000;
     return utc;
   }
+
+  // UTC instant of local midnight (today) in `tz`.
+  const startOfLocalDay = (now, tz) => localToUtc(tz, civilDay(now, tz));
+
+  // zonedParts for bulk use (week and month views): Intl is slow, so reuse
+  // the zone's UTC offset across 12-hour blocks that don't contain a DST change.
+  const BLOCK = 12 * HOUR;
+  const offCache = new Map();
+  function fastParts(ms, tz) {
+    const block = Math.floor(ms / BLOCK);
+    const key = tz + '|' + block;
+    let off = offCache.get(key);
+    if (off === undefined) {
+      const a = offsetMinutes(tz, block * BLOCK);
+      off = a === offsetMinutes(tz, (block + 1) * BLOCK - 1000) ? a : null;
+      if (offCache.size > 20000) offCache.clear();
+      offCache.set(key, off);
+    }
+    if (off === null) return zonedParts(new Date(ms), tz);
+    const d = new Date(ms + off * 60000);
+    return {
+      year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(),
+      hour: d.getUTCHours(), minute: d.getUTCMinutes(), second: d.getUTCSeconds(),
+      weekday: DAY_KEYS[d.getUTCDay()],
+    };
+  }
+
+  // Formatting a civil date (see civilDay).
+  const civilFmt = (ms, opts) => new Date(ms).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
 
   function formatOffset(mins) {
     const sign = mins < 0 ? '−' : '+';
@@ -183,6 +223,26 @@
 
   const newId = () => Math.random().toString(36).slice(2, 10);
 
+  // Keeps valid events, sorted by start, dropping any that ended over a week ago.
+  function cleanEvents(v, now = Date.now()) {
+    if (!Array.isArray(v)) return [];
+    const oldest = now - EVENTS.keepDays * DAY_MS;
+    const latest = now + EVENTS.aheadDays * DAY_MS;
+    const seen = new Set();
+    const out = [];
+    for (const e of v) {
+      if (!e || !CAT_IDS.includes(e.cat) || !Number.isSafeInteger(e.start) || !Number.isSafeInteger(e.end)) continue;
+      if (e.end <= e.start || e.end - e.start > EVENTS.maxDays * DAY_MS || e.end < oldest || e.start > latest) continue;
+      const id = typeof e.id === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(e.id) && !seen.has(e.id) ? e.id : newId();
+      seen.add(id);
+      const ev = { id, start: e.start, end: e.end, cat: e.cat };
+      const note = typeof e.note === 'string' ? e.note.trim().slice(0, EVENTS.note) : '';
+      if (note) ev.note = note;
+      out.push(ev);
+    }
+    return out.sort((a, b) => a.start - b.start).slice(0, EVENTS.perColumn);
+  }
+
   function sanitizeCity(c) {
     if (!c || typeof c.city !== 'string' || !isValidTz(c.tz)) return null;
     const out = {
@@ -200,6 +260,7 @@
     out.workDays = Array.isArray(c.workDays)
       ? [...new Set(c.workDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
       : defaultWorkDays();
+    out.events = cleanEvents(c.events);
     if (typeof c.ownerId === 'string') out.ownerId = c.ownerId; // shared boards only
     return out;
   }
@@ -366,7 +427,7 @@
       const t = to12h(p.hour, p.minute);
       e.time.textContent = t.text;
       e.sfx.textContent = t.suffix;
-      const cat = statusAt(e.c, p) || '';
+      const cat = statusNow(e.c, now.getTime(), p) || '';
       if (e.status.dataset.v !== cat) {
         e.status.dataset.v = cat;
         e.status.className = 'status' + (cat ? ' cat-' + cat : '');
@@ -401,10 +462,10 @@
     return false; // all 24 hours are work: no shift start, use the hour's own day
   }
 
-  // Status of city `c` at local time parts `p`. Work hours only count on the
-  // column's work days (in its own local date); overnight shifts count toward
-  // the day they start.
-  function statusAt(c, p) {
+  // Weekly status of city `c` at local time parts `p`. Work hours only count on
+  // the column's work days (in its own local date); overnight shifts count
+  // toward the day they start.
+  function templateStatus(c, p) {
     const cat = c.schedule[p.hour];
     if (cat !== 'work') return cat;
     let day = DAY_KEYS.indexOf(p.weekday);
@@ -412,16 +473,47 @@
     return c.workDays.includes(day) ? cat : null;
   }
 
+  // The one-off event overlapping [t0, t1) the most, as { e, ov } (overlap in ms).
+  function bestEvent(c, t0, t1) {
+    let best = null;
+    for (const e of c.events) {
+      if (e.start >= t1) break; // sorted by start
+      const ov = Math.min(e.end, t1) - Math.max(e.start, t0);
+      if (ov > 0 && (!best || ov > best.ov)) best = { e, ov };
+    }
+    return best;
+  }
+
+  // Status at an instant: a one-off event wins over the weekly schedule.
+  function statusNow(c, ms, p) {
+    const hit = c.events.find((e) => e.start <= ms && ms < e.end);
+    return hit ? hit.cat : templateStatus(c, p);
+  }
+
+  // Status over the hour starting at t0 (week/month views): an event counts
+  // when it covers at least half of the hour.
+  function slotStatus(c, t0) {
+    const p = fastParts(t0, c.tz);
+    const b = bestEvent(c, t0, t0 + HOUR);
+    const ev = b && b.ov * 2 >= HOUR ? b.e : null;
+    return { cat: ev ? ev.cat : templateStatus(c, p), ev, p };
+  }
+
+  // "Available" for overlap finding: marked Free, or unscheduled during
+  // waking hours (8 AM–10 PM) in their own time zone.
+  const isAvailable = (s) => s.cat === 'free' || (!s.cat && s.p.hour >= 8 && s.p.hour < 22);
+
   function renderBody(now) {
-    const refTz = cities[0].tz;
-    const start = startOfLocalDay(now, refTz);
-    const refParts = zonedParts(new Date(start), refTz);
-    const refDay = Date.UTC(refParts.year, refParts.month - 1, refParts.day);
-    const currentIdx = Math.min(23, Math.max(0, Math.floor((now - start) / HOUR)));
+    const tz = refTz();
+    const refDay = viewDay(now);
+    const start = localToUtc(tz, refDay);
+    const nowMs = now.getTime();
+    const currentIdx = nowMs >= start && nowMs < start + DAY_MS ? Math.floor((nowMs - start) / HOUR) : -1;
 
     const frag = document.createDocumentFragment();
     for (let r = 0; r < 24; r++) {
-      const instant = new Date(start + r * HOUR);
+      const t0 = start + r * HOUR;
+      const instant = new Date(t0);
       const tr = el('tr');
       if (r === currentIdx) tr.classList.add('current');
 
@@ -430,24 +522,43 @@
         const td = el('td');
         td.dataset.col = i;
         td.dataset.hour = p.hour;
+        td.dataset.t0 = t0;
         if (i === 0) td.classList.add('ref');
-        const cat = statusAt(c, p);
+        // A one-off covering the whole hour replaces its status; a partial one
+        // is drawn as a band over the part of the hour it covers.
+        const hit = bestEvent(c, t0, t0 + HOUR);
+        const full = !!hit && hit.ov >= HOUR;
+        const cat = full ? hit.e.cat : templateStatus(c, p);
         if (cat) td.classList.add('cat', 'cat-' + cat);
+        if (hit) {
+          td.classList.add('evt');
+          if (!full) {
+            td.classList.add('evt-part');
+            td.style.setProperty('--ea', ((Math.max(hit.e.start, t0) - t0) / HOUR) * 100 + '%');
+            td.style.setProperty('--eb', ((Math.min(hit.e.end, t0 + HOUR) - t0) / HOUR) * 100 + '%');
+            td.style.setProperty('--ec', 'var(--cat-' + hit.e.cat + ')');
+          }
+        }
         const editable = canEdit(c);
         if (!editable) td.classList.add('locked');
 
         const t = to12h(p.hour, p.minute);
         td.dataset.label = t.text + ' ' + t.suffix;
-        td.title = displayName(c) + ' · ' + td.dataset.label + (cat ? ' · ' + catLabel(cat) : '') + (editable ? ' — click to set status' : '');
+        td.title = displayName(c) + ' · ' + td.dataset.label + (cat ? ' · ' + catLabel(cat) : '')
+          + (hit ? '\nOne-off: ' + catLabel(hit.e.cat) + (hit.e.note ? ' — ' + hit.e.note : '') + ' · ' + eventWhen(hit.e, c.tz) : '')
+          + (editable ? '\nClick to set status' : '');
         td.append(el('span', 'time', t.text), el('span', 'suffix', t.suffix));
 
-        const dayDiff = Math.round((Date.UTC(p.year, p.month - 1, p.day) - refDay) / 86400000);
+        const dayDiff = Math.round((Date.UTC(p.year, p.month - 1, p.day) - refDay) / DAY_MS);
         if (dayDiff !== 0) {
           const chip = el('span', 'chip ' + (dayDiff > 0 ? 'ahead' : 'behind'), p.weekday);
           chip.title = (dayDiff > 0 ? 'Next day' : 'Previous day') + ' relative to ' + displayName(cities[0]);
           td.append(chip);
         }
         if (r === currentIdx && i === 0) td.append(el('span', 'now-pill', 'Now'));
+        // Name the event where it starts (or at the top of the day).
+        if (hit && hit.e.note && (hit.e.start >= t0 || r === 0)) td.append(el('span', 'evt-note', hit.e.note));
+        if (hit) td.append(el('i', 'evt-mark'));
         tr.append(td);
       });
       tr.append(el('td', 'pad'));
@@ -456,21 +567,321 @@
     bodyRows.replaceChildren(frag);
   }
 
+  // ---------- Rendering: week and month ----------
+  // Both keep every person in view: a week cell has one stripe per person
+  // (left → right in column order) and a month day one bar per person. Hours
+  // follow the reference column's zone, like the day grid.
+
+  const cal = $('#cal');
+  const calKey = $('#cal-key');
+  const hourLabel = (h) => { const t = to12h(h, 0); return t.hh + ' ' + t.suffix; };
+
+  function renderCal(now) {
+    renderKey();
+    if (nav.range === 'week') renderWeek(now); else renderMonth(now);
+  }
+
+  // Who's who: the order people appear in each stripe or bar.
+  function renderKey() {
+    const people = el('div', 'key-people');
+    cities.forEach((c, i) => {
+      const b = button('key-person', null, { title: displayName(c) + ' · ' + c.city + ' — ' + (canEdit(c) ? 'edit' : 'view') + ' column' });
+      b.dataset.action = 'edit';
+      b.dataset.idx = i;
+      const n = el('span', 'key-n', String(i + 1).padStart(2, '0'));
+      const color = headerColorFor(c, i);
+      if (color) { n.style.background = color; n.style.color = textOn(color); }
+      b.append(n, el('span', 'key-name', displayName(c)));
+      if (inBoard() && c.ownerId && c.ownerId === sync.user.id) b.append(el('span', 'key-you', 'YOU'));
+      people.append(b);
+    });
+    const meta = el('span', 'key-meta');
+    const avail = el('span', 'key-avail');
+    avail.title = 'Everyone is marked Free, or has nothing scheduled between 8 AM and 10 PM their time';
+    avail.append(el('i', 'avail-swatch'), 'Everyone available');
+    meta.append(el('span', 'key-hint', nav.range === 'week' ? 'Stripes run left → right in this order' : 'Bars run top → bottom in this order'), avail);
+    calKey.replaceChildren(people, meta);
+  }
+
+  function renderWeek(now) {
+    const tz = refTz();
+    const today = civilDay(now, tz);
+    const first = weekStart(viewDay(now));
+    const nowMs = now.getTime();
+    const starts = [];
+
+    const headTr = el('tr');
+    const corner = el('th', 'wk-corner', formatOffset(offsetMinutes(tz, localToUtc(tz, first))));
+    corner.title = 'Hours in ' + displayName(cities[0]) + ' time';
+    headTr.append(corner);
+    for (let d = 0; d < 7; d++) {
+      const day = first + d * DAY_MS;
+      starts.push(localToUtc(tz, day));
+      const th = el('th', 'wk-day' + (day === today ? ' today' : ''));
+      const b = button('wk-day-btn', null, { title: 'Open ' + civilFmt(day, { weekday: 'long', month: 'long', day: 'numeric' }) });
+      b.dataset.day = day;
+      b.append(el('span', 'wk-dow', civilFmt(day, { weekday: 'short' })), el('span', 'wk-date', String(new Date(day).getUTCDate())));
+      th.append(b);
+      headTr.append(th);
+    }
+    const thead = el('thead');
+    thead.append(headTr);
+
+    const tbody = el('tbody');
+    for (let r = 0; r < 24; r++) {
+      const tr = el('tr');
+      tr.append(el('th', 'wk-hour', hourLabel(r)));
+      for (let d = 0; d < 7; d++) {
+        const t0 = starts[d] + r * HOUR;
+        const td = el('td');
+        td.dataset.t0 = t0;
+        td.dataset.day = first + d * DAY_MS;
+        td.dataset.r = r;
+        const bar = el('div', 'stripes');
+        let all = true;
+        for (const c of cities) {
+          const s = slotStatus(c, t0);
+          if (!isAvailable(s)) all = false;
+          bar.append(el('span', 'st' + (s.cat ? ' cat-' + s.cat : '') + (s.ev ? ' ev' : '')));
+        }
+        if (all) td.classList.add('all-free');
+        if (t0 + HOUR <= nowMs) td.classList.add('past');
+        if (t0 <= nowMs && nowMs < t0 + HOUR) { td.classList.add('now'); tr.classList.add('current'); }
+        td.append(bar);
+        tr.append(td);
+      }
+      tbody.append(tr);
+    }
+    const table = el('table', 'wk');
+    table.append(thead, tbody);
+    cal.replaceChildren(table);
+  }
+
+  // Month bars: one CSS gradient per person-day instead of 24 elements.
+  function stripGradient(row) {
+    const stops = [];
+    for (let from = 0, r = 1; r <= row.length; r++) {
+      if (r < row.length && row[r].cat === row[from].cat) continue;
+      const color = row[from].cat ? 'var(--st-' + row[from].cat + ')' : 'transparent';
+      stops.push(color + ' ' + ((from / row.length) * 100).toFixed(2) + '% ' + ((r / row.length) * 100).toFixed(2) + '%');
+      from = r;
+    }
+    return 'linear-gradient(90deg, ' + stops.join(', ') + ')';
+  }
+
+  function renderMonth(now) {
+    const tz = refTz();
+    const today = civilDay(now, tz);
+    const first = monthStart(viewDay(now));
+    const month = new Date(first).getUTCMonth();
+    const gridStart = weekStart(first);
+    const next = Date.UTC(new Date(first).getUTCFullYear(), month + 1, 1);
+    const weeks = Math.ceil((next - gridStart) / DAY_MS / 7);
+
+    const wrap = el('div', 'mo');
+    wrap.style.setProperty('--weeks', weeks);
+    wrap.style.setProperty('--n', cities.length);
+    for (const d of DAY_ORDER) wrap.append(el('div', 'mo-dow', DAY_KEYS[d]));
+    for (let i = 0; i < weeks * 7; i++) {
+      const day = gridStart + i * DAY_MS;
+      const start = localToUtc(tz, day);
+      const end = localToUtc(tz, day + DAY_MS);
+      const rows = cities.map((c) => Array.from({ length: 24 }, (_, r) => slotStatus(c, start + r * HOUR)));
+      let freeHours = 0;
+      for (let r = 0; r < 24; r++) if (rows.every((row) => isAvailable(row[r]))) freeHours++;
+      const events = cities.reduce((n, c) => n + c.events.filter((e) => e.start < end && e.end > start).length, 0);
+
+      const cell = button('mo-day' + (new Date(day).getUTCMonth() !== month ? ' other' : '')
+        + (day === today ? ' today' : '') + (day < today ? ' past' : ''));
+      cell.dataset.day = day;
+      cell.title = civilFmt(day, { weekday: 'long', month: 'long', day: 'numeric' })
+        + (freeHours ? '\n' + freeHours + 'h when everyone is available' : '')
+        + (events ? '\n' + events + ' one-off event' + (events > 1 ? 's' : '') : '')
+        + '\nClick to open the day';
+      const top = el('div', 'mo-top');
+      top.append(el('span', 'mo-n', String(new Date(day).getUTCDate())));
+      if (events) top.append(el('span', 'mo-evt', String(events)));
+      if (freeHours) top.append(el('span', 'mo-free', '✓' + freeHours + 'H'));
+      const bars = el('div', 'mo-bars');
+      for (const row of rows) {
+        const b = el('i', 'mo-bar');
+        b.style.backgroundImage = stripGradient(row);
+        bars.append(b);
+      }
+      cell.append(top, bars);
+      wrap.append(cell);
+    }
+    cal.replaceChildren(wrap);
+  }
+
+  // Week cell details: everyone's local time and status at that hour.
+  function openSlotMenu(td) {
+    closeCellMenu();
+    cellMenu.classList.add('wide');
+    const t0 = +td.dataset.t0;
+    const day = +td.dataset.day;
+    const rp = zonedParts(new Date(t0), refTz());
+    const rt = to12h(rp.hour, rp.minute);
+    const head = el('div', 'menu-head');
+    head.append(el('span', 'menu-name', civilFmt(day, { weekday: 'short', month: 'short', day: 'numeric' })), el('span', 'menu-time', rt.text + ' ' + rt.suffix));
+    cellMenu.replaceChildren(head);
+
+    let all = true;
+    for (const c of cities) {
+      const s = slotStatus(c, t0);
+      if (!isAvailable(s)) all = false;
+      const editable = canEdit(c);
+      const b = button('menu-item person' + (editable ? '' : ' ro'), null, {
+        role: 'menuitem',
+        title: editable ? (s.ev ? 'Edit this one-off event' : 'Add a one-off event for ' + displayName(c)) : 'Managed by ' + ownerText(c),
+      });
+      if (s.cat) b.style.setProperty('--c', 'var(--cat-' + s.cat + ')');
+      const lt = to12h(s.p.hour, s.p.minute);
+      const main = el('span', 'person-main');
+      main.append(el('span', 'person-name', displayName(c)),
+        el('span', 'person-sub', (s.cat ? catLabel(s.cat) : 'Unscheduled') + (s.ev ? ' · one-off' + (s.ev.note ? ': ' + s.ev.note : '') : '')));
+      b.append(el('i', 'menu-swatch' + (s.cat ? '' : ' none')), main, el('span', 'person-time', lt.text + ' ' + lt.suffix));
+      if (editable) {
+        b.addEventListener('click', () => {
+          closeCellMenu();
+          openEventDialog(s.ev ? { colId: c.id, event: s.ev } : { colId: c.id, start: t0, end: t0 + HOUR });
+        });
+      } else b.setAttribute('aria-disabled', 'true');
+      cellMenu.append(b);
+    }
+    if (all) cellMenu.append(el('div', 'menu-avail', '✓ Everyone available'));
+    const open = button('menu-item link', 'Open this day →');
+    open.addEventListener('click', () => { closeCellMenu(); setRange('day', day, +td.dataset.r); });
+    cellMenu.append(el('div', 'menu-sep'), open);
+
+    menuTd = td;
+    td.classList.add('menu-open');
+    showMenuAt(td.getBoundingClientRect());
+  }
+
+  cal.addEventListener('click', (e) => {
+    const td = e.target.closest('td[data-t0]');
+    if (td) { if (menuTd === td) closeCellMenu(); else openSlotMenu(td); return; }
+    const b = e.target.closest('button[data-day]');
+    if (b) setRange('day', +b.dataset.day);
+  });
+  calKey.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-action="edit"]');
+    if (b) openColDialog(+b.dataset.idx);
+  });
+
+  // ---------- Date navigation ----------
+  // `nav.day` is a civil date in the reference zone, or null to follow today
+  // (so the view rolls over at midnight).
+
+  const RANGES = ['day', 'week', 'month'];
+  const nav = { range: RANGES.includes(root.dataset.range) ? root.dataset.range : 'day', day: null };
+  function refTz() { return cities[0].tz; }
+  const viewDay = (now) => nav.day ?? civilDay(now, refTz());
+  const weekStart = (day) => day - ((new Date(day).getUTCDay() + 6) % 7) * DAY_MS; // Monday
+  const monthStart = (day) => { const d = new Date(day); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };
+  const sameRange = (a, b) => (nav.range === 'day' ? a === b : nav.range === 'week' ? weekStart(a) === weekStart(b) : monthStart(a) === monthStart(b));
+
+  // The stacked mobile layout only applies to the day view.
+  function applyViewMode() {
+    root.dataset.view = nav.range === 'day' ? localStorage.getItem(VIEW_KEY) || 'grid' : 'grid';
+  }
+
+  function setRange(range, day, hour) {
+    nav.range = range;
+    if (day !== undefined) nav.day = day === civilDay(new Date(), refTz()) ? null : day;
+    root.dataset.range = range;
+    localStorage.setItem(RANGE_KEY, range);
+    applyViewMode();
+    renderAll(false);
+    scrollCurrentIntoView(hour);
+  }
+
+  function shiftView(dir) {
+    const now = new Date();
+    const day = viewDay(now);
+    let next;
+    if (nav.range === 'month') { const d = new Date(day); next = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + dir, 1); }
+    else next = day + dir * (nav.range === 'week' ? 7 : 1) * DAY_MS;
+    nav.day = sameRange(next, civilDay(now, refTz())) ? null : next;
+    renderAll(false);
+    scrollCurrentIntoView();
+  }
+
+  function goToday() {
+    nav.day = null;
+    renderAll(true);
+  }
+
+  const navLabel = $('#nav-label');
+  function renderNav(now) {
+    const today = civilDay(now, refTz());
+    const day = viewDay(now);
+    const year = (ms) => new Date(ms).getUTCFullYear();
+    document.querySelectorAll('#range-seg [data-range]').forEach((b) => {
+      const on = b.dataset.range === nav.range;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on);
+    });
+    let label;
+    if (nav.range === 'day') {
+      label = civilFmt(day, { weekday: 'short', month: 'short', day: 'numeric', ...(year(day) !== year(today) ? { year: 'numeric' } : {}) });
+    } else if (nav.range === 'week') {
+      const a = weekStart(day), b = a + 6 * DAY_MS;
+      const sameMonth = new Date(a).getUTCMonth() === new Date(b).getUTCMonth();
+      label = civilFmt(a, { month: 'short', day: 'numeric' }) + ' – ' + civilFmt(b, sameMonth ? { day: 'numeric' } : { month: 'short', day: 'numeric' })
+        + (year(b) !== year(today) ? ', ' + year(b) : '');
+    } else {
+      label = civilFmt(day, { month: 'long', ...(year(day) !== year(today) ? { year: 'numeric' } : {}) });
+    }
+    navLabel.textContent = label;
+    const isNow = sameRange(day, today);
+    navLabel.classList.toggle('away', !isNow);
+    $('#nav-today').disabled = isNow;
+    navLabel.title = 'Dates and hours in ' + displayName(cities[0]) + '’s time (the reference column)';
+  }
+
+  document.querySelectorAll('#range-seg [data-range]').forEach((b) => b.addEventListener('click', () => setRange(b.dataset.range)));
+  $('#nav-prev').addEventListener('click', () => shiftView(-1));
+  $('#nav-next').addEventListener('click', () => shiftView(1));
+  $('#nav-today').addEventListener('click', goToday);
+  // Keyboard: ← → to move, T for today, D / W / M to switch views.
+  document.addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || document.querySelector('dialog[open]') || !cellMenu.hidden) return;
+    if (e.target !== document.body && !e.target.closest('.viewbar')) return;
+    const k = e.key.toLowerCase();
+    if (k === 'arrowleft') shiftView(-1);
+    else if (k === 'arrowright') shiftView(1);
+    else if (k === 't') goToday();
+    else if (k === 'd' || k === 'w' || k === 'm') setRange(RANGES.find((r) => r[0] === k));
+    else return;
+    e.preventDefault();
+  });
+
   // ---------- Render orchestration ----------
 
   let renderedKey = '';
 
   function stateKey(now) {
-    const start = startOfLocalDay(now, cities[0].tz);
-    return start + '#' + Math.floor((now - start) / HOUR);
+    const start = startOfLocalDay(now, refTz());
+    return nav.range + '#' + viewDay(now) + '#' + start + '#' + Math.floor((now - start) / HOUR);
+  }
+
+  // Redraw the time grid of the current range (not the column headers).
+  function renderView(now = new Date()) {
+    if (nav.range === 'day') renderBody(now); else renderCal(now);
   }
 
   // Full redraw. `scroll` re-centres the current hour.
   function renderAll(scroll) {
     const now = new Date();
     closeCellMenu();
+    const day = nav.range === 'day';
+    $('#grid').hidden = !day;
+    cal.hidden = calKey.hidden = day;
+    renderNav(now);
     renderHead(now);
-    renderBody(now);
+    renderView(now);
     renderedKey = stateKey(now);
     if (scroll) scrollCurrentIntoView();
   }
@@ -479,18 +890,25 @@
     const now = new Date();
     const key = stateKey(now);
     if (key !== renderedKey) {
-      renderBody(now);
+      renderNav(now);
+      renderView(now);
       renderedKey = key;
     }
     updateClocks(now);
   }
 
-  function scrollCurrentIntoView() {
-    const row = bodyRows.querySelector('tr.current');
+  // Centre the current hour (or put `hour`, else 8 AM, near the top).
+  function scrollCurrentIntoView(hour) {
+    if (nav.range === 'month') { board.scrollTop = 0; return; }
+    const week = nav.range === 'week';
+    const rows = week ? cal.querySelector('tbody') : bodyRows;
+    const head = (week ? cal.querySelector('thead') : headRow).getBoundingClientRect().height;
+    const current = hour == null && rows.querySelector('tr.current');
+    const row = current || rows.children[hour ?? 8];
     if (!row) return;
-    const head = headRow.getBoundingClientRect().height;
-    const target = row.offsetTop - head - (board.clientHeight - head) / 2 + row.offsetHeight / 2;
-    board.scrollTop = Math.max(0, target);
+    board.scrollTop = Math.max(0, current
+      ? row.offsetTop - head - (board.clientHeight - head) / 2 + row.offsetHeight / 2
+      : row.offsetTop - head - 8);
   }
 
   // ---------- Column actions ----------
@@ -720,6 +1138,11 @@
         if (c.headerColor) col.headerColor = c.headerColor;
         col.schedule = scheduleToRanges(c.schedule);
         col.workDays = DAY_ORDER.filter((d) => c.workDays.includes(d)).map((d) => DAY_KEYS[d]);
+        if (c.events.length) {
+          col.events = c.events.map((e) => ({
+            start: new Date(e.start).toISOString(), end: new Date(e.end).toISOString(), status: e.cat, ...(e.note ? { note: e.note } : {}),
+          }));
+        }
         return col;
       }),
     };
@@ -758,6 +1181,9 @@
       schedule: rangesToSchedule(col.schedule),
       workDays: Array.isArray(col.workDays)
         ? col.workDays.map((d) => DAY_KEYS.findIndex((k) => k.toLowerCase() === String(d).slice(0, 3).toLowerCase()))
+        : undefined,
+      events: Array.isArray(col.events)
+        ? col.events.map((e) => e && { start: Date.parse(e.start), end: Date.parse(e.end), cat: e.status || e.cat, note: e.note })
         : undefined,
     })).filter(Boolean);
     const skipped = data.columns.length - list.length;
@@ -832,37 +1258,108 @@
   // ---------- Cell status menu ----------
 
   let menuTd = null;
+  // Whether the cell menu edits the weekly schedule or just that date.
+  let menuMode = localStorage.getItem(MENU_MODE_KEY) === 'once' ? 'once' : 'repeat';
 
   function setStatus(col, hour, cat) {
     cities[col].schedule[hour] = cat;
     saveCities();
-    renderBody(new Date());
+    renderView();
+  }
+
+  // Give column `c` status `cat` over [a, b) as a one-off, trimming or splitting
+  // any events already there. `cat` null just clears one-offs from that span.
+  function setOneOff(c, a, b, cat) {
+    const list = [];
+    for (const e of c.events) {
+      if (e.end <= a || e.start >= b) { list.push(e); continue; }
+      if (e.start < a) list.push({ ...e, end: a });
+      if (e.end > b) list.push({ ...e, id: e.start < a ? newId() : e.id, start: b });
+    }
+    if (cat) {
+      const ev = { id: newId(), start: a, end: b, cat };
+      // Tapping neighbouring hours grows one event rather than making many.
+      for (let i = list.length - 1; i >= 0; i--) {
+        const e = list[i];
+        const touches = e.end === ev.start || e.start === ev.end;
+        if (e.cat === cat && !e.note && touches && Math.max(e.end, ev.end) - Math.min(e.start, ev.start) <= EVENTS.maxDays * DAY_MS) {
+          ev.start = Math.min(e.start, ev.start);
+          ev.end = Math.max(e.end, ev.end);
+          ev.id = e.id;
+          list.splice(i, 1);
+        }
+      }
+      list.push(ev);
+    }
+    if (list.length > EVENTS.perColumn && list.length > c.events.length) {
+      toast('Each person can have up to ' + EVENTS.perColumn + ' one-off events — delete a few first.', true);
+      return;
+    }
+    c.events = list.sort((x, y) => x.start - y.start);
+    saveCities();
+    renderView();
   }
 
   function openCellMenu(td) {
     closeCellMenu();
+    cellMenu.classList.remove('wide');
     const col = +td.dataset.col;
     const hour = +td.dataset.hour;
+    const t0 = +td.dataset.t0, t1 = t0 + HOUR;
     const c = cities[col];
-    const current = c.schedule[hour];
+    const hit = bestEvent(c, t0, t1);
+    const once = menuMode === 'once';
+    const date = new Date(t0).toLocaleDateString('en-US', { timeZone: c.tz, weekday: 'short', month: 'short', day: 'numeric' });
+    const current = once ? (hit && hit.ov >= HOUR ? hit.e.cat : undefined) : c.schedule[hour];
 
     const head = el('div', 'menu-head');
     head.append(el('span', 'menu-name', displayName(c)), el('span', 'menu-time', td.dataset.label));
     cellMenu.replaceChildren(head);
 
+    const seg = el('div', 'menu-seg');
+    for (const [mode, text, tip] of [
+      ['repeat', 'Every week', 'Change the usual weekly schedule for this hour'],
+      ['once', 'Just ' + date, 'Only change this hour on ' + date + ' — a one-off'],
+    ]) {
+      const b = button('menu-seg-btn' + (menuMode === mode ? ' active' : ''), text, { title: tip, 'aria-pressed': menuMode === mode });
+      b.addEventListener('click', () => {
+        menuMode = mode;
+        localStorage.setItem(MENU_MODE_KEY, mode);
+        openCellMenu(td);
+      });
+      seg.append(b);
+    }
+    cellMenu.append(seg);
+
     for (const cat of CATEGORIES) {
       const b = button('menu-item' + (current === cat.id ? ' active' : ''), null, { role: 'menuitemradio' });
       b.style.setProperty('--c', 'var(--cat-' + cat.id + ')');
       b.append(el('i', 'menu-swatch'), el('span', null, cat.label));
-      b.addEventListener('click', () => { setStatus(col, hour, cat.id); closeCellMenu(); });
+      b.addEventListener('click', () => {
+        closeCellMenu();
+        if (once) setOneOff(c, t0, t1, cat.id); else setStatus(col, hour, cat.id);
+      });
       cellMenu.append(b);
     }
-    const clear = button('menu-item clear' + (current ? '' : ' active'), null, { role: 'menuitemradio' });
-    clear.append(el('i', 'menu-swatch none'), el('span', null, 'None'));
-    clear.addEventListener('click', () => { setStatus(col, hour, null); closeCellMenu(); });
+    if (!once) {
+      const clear = button('menu-item clear' + (current ? '' : ' active'), null, { role: 'menuitemradio' });
+      clear.append(el('i', 'menu-swatch none'), el('span', null, 'None'));
+      clear.addEventListener('click', () => { setStatus(col, hour, null); closeCellMenu(); });
+      cellMenu.append(clear);
+    } else if (hit) {
+      const clear = button('menu-item clear', null, { role: 'menuitem', title: 'Go back to the weekly schedule for this hour' });
+      clear.append(el('i', 'menu-swatch none'), el('span', null, 'Remove one-off'));
+      clear.addEventListener('click', () => { closeCellMenu(); setOneOff(c, t0, t1, null); });
+      cellMenu.append(clear);
+    }
+    const details = button('menu-item link', hit ? 'Edit one-off' + (hit.e.note ? ' “' + hit.e.note + '”' : '') + '…' : 'New event with times & note…');
+    details.addEventListener('click', () => {
+      closeCellMenu();
+      openEventDialog(hit ? { colId: c.id, event: hit.e } : { colId: c.id, start: t0, end: t1 });
+    });
     const edit = button('menu-item link', 'Edit full schedule…');
     edit.addEventListener('click', () => { closeCellMenu(); openColDialog(col); });
-    cellMenu.append(clear, el('div', 'menu-sep'), edit);
+    cellMenu.append(el('div', 'menu-sep'), details, edit);
 
     menuTd = td;
     td.classList.add('menu-open');
@@ -883,6 +1380,7 @@
   // Lists the columns hidden from your view so you can bring them back.
   function openHiddenMenu(anchor) {
     closeCellMenu();
+    cellMenu.classList.remove('wide');
     const head = el('div', 'menu-head');
     head.append(el('span', 'menu-name', 'Hidden'), el('span', 'menu-time', String(sync.hiddenCols.length)));
     cellMenu.replaceChildren(head);
@@ -915,7 +1413,7 @@
     else openCellMenu(td);
   });
   document.addEventListener('pointerdown', (e) => {
-    if (!cellMenu.hidden && !cellMenu.contains(e.target) && !e.target.closest('td[data-col]')) closeCellMenu();
+    if (!cellMenu.hidden && !cellMenu.contains(e.target) && !e.target.closest('td[data-t0]')) closeCellMenu();
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCellMenu(); });
   board.addEventListener('scroll', closeCellMenu, { passive: true });
@@ -991,7 +1489,7 @@
     if (!c || c.schedule[h] === paintValue) return;
     c.schedule[h] = paintValue;
     paintHourButtons();
-    renderBody(new Date());
+    renderView();
   }
   hoursEl.addEventListener('pointerdown', (e) => {
     const b = e.target.closest('.hour');
@@ -1021,7 +1519,7 @@
     b.addEventListener('click', () => {
       const c = editCity();
       c.workDays = c.workDays.includes(d) ? c.workDays.filter((x) => x !== d) : [...c.workDays, d].sort();
-      saveCities(); paintDayButtons(); renderBody(new Date());
+      saveCities(); paintDayButtons(); renderView();
     });
     daysEl.append(b);
   }
@@ -1036,20 +1534,20 @@
   }
   $('#days-weekdays').addEventListener('click', () => {
     editCity().workDays = defaultWorkDays();
-    saveCities(); paintDayButtons(); renderBody(new Date());
+    saveCities(); paintDayButtons(); renderView();
   });
   $('#days-all').addEventListener('click', () => {
     editCity().workDays = [0, 1, 2, 3, 4, 5, 6];
-    saveCities(); paintDayButtons(); renderBody(new Date());
+    saveCities(); paintDayButtons(); renderView();
   });
 
   $('#sched-default').addEventListener('click', () => {
     editCity().schedule = defaultSchedule();
-    saveCities(); paintHourButtons(); renderBody(new Date());
+    saveCities(); paintHourButtons(); renderView();
   });
   $('#sched-clear').addEventListener('click', () => {
     editCity().schedule = Array(24).fill(null);
-    saveCities(); paintHourButtons(); renderBody(new Date());
+    saveCities(); paintHourButtons(); renderView();
   });
 
   colName.addEventListener('input', () => {
@@ -1109,6 +1607,7 @@
     $('#col-hide').hidden = !inBoard() || cities.length <= 1;
     $('#col-makeref').hidden = i === 0;
     $('#col-owner-field').hidden = !(inBoard() && isAdmin());
+    paintEventList();
     if (!editable) return;
     if (inBoard() && isAdmin()) {
       const current = (id) => [...cities, ...sync.hiddenCols].find((o) => o.ownerId === id && o !== c);
@@ -1130,6 +1629,238 @@
     // Avoid popping the on-screen keyboard on touch devices.
     if (canEdit(cities[i]) && matchMedia('(hover: hover)').matches) colName.focus();
   }
+
+  // ---------- One-off events ----------
+  // Times are entered in the column's own zone (the person's local time) and
+  // stored as UTC instants, so they land on the right hour for everyone.
+
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const isMidnight = (ms, tz) => { const p = zonedParts(new Date(ms), tz); return p.hour === 0 && p.minute === 0; };
+  const isAllDay = (e, tz) => isMidnight(e.start, tz) && isMidnight(e.end, tz);
+
+  function toInputs(ms, tz) {
+    const p = zonedParts(new Date(ms), tz);
+    return { date: p.year + '-' + pad2(p.month) + '-' + pad2(p.day), time: pad2(p.hour) + ':' + pad2(p.minute) };
+  }
+
+  // Civil ms of a yyyy-mm-dd input value, or NaN.
+  function inputDay(value) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : NaN;
+  }
+
+  function fromInputs(date, time, tz) {
+    const day = inputDay(date);
+    const t = /^(\d{2}):(\d{2})/.exec(time);
+    return isNaN(day) || !t ? NaN : localToUtc(tz, day + (+t[1]) * HOUR + (+t[2]) * 60000);
+  }
+
+  // e.g. "Sat, Oct 3 · 2 – 5:30 PM", "Oct 3 – Oct 10", "Sat, Oct 3 · all day".
+  function eventWhen(e, tz) {
+    const D = { weekday: 'short', month: 'short', day: 'numeric' };
+    const day = (ms, o = D) => new Date(ms).toLocaleDateString('en-US', { timeZone: tz, ...o });
+    const time = (ms) => { const p = zonedParts(new Date(ms), tz); const t = to12h(p.hour, p.minute); return (p.minute ? t.text : t.hh) + ' ' + t.suffix; };
+    if (isAllDay(e, tz)) {
+      const last = e.end - 60000;
+      return day(e.start) === day(last) ? day(e.start) + ' · all day' : day(e.start) + ' – ' + day(last);
+    }
+    if (day(e.start) === day(e.end - 1)) return day(e.start) + ' · ' + time(e.start) + ' – ' + time(e.end);
+    return day(e.start) + ', ' + time(e.start) + ' – ' + day(e.end) + ', ' + time(e.end);
+  }
+
+  const evtDialog = $('#evt-dialog');
+  const evtWho = $('#evt-who');
+  const evtAllDay = $('#evt-allday');
+  const evtStartDate = $('#evt-start-date');
+  const evtStartTime = $('#evt-start-time');
+  const evtEndDate = $('#evt-end-date');
+  const evtEndTime = $('#evt-end-time');
+  const evtNote = $('#evt-note');
+  const evtError = $('#evt-error');
+  const evtBrushes = $('#evt-brushes');
+  let evtEdit = null; // { colId, id } of the event being edited; id is null when new
+  let evtCat = 'busy';
+
+  const allColumns = () => [...cities, ...sync.hiddenCols];
+  const evtColumn = () => allColumns().find((c) => c.id === evtWho.value);
+
+  for (const cat of CATEGORIES) {
+    const b = button('brush', null, { role: 'radio', 'data-cat': cat.id });
+    b.style.setProperty('--c', 'var(--cat-' + cat.id + ')');
+    b.append(el('i', 'brush-swatch'), el('span', null, cat.label));
+    b.addEventListener('click', () => setEvtCat(cat.id));
+    evtBrushes.append(b);
+  }
+  function setEvtCat(id) {
+    evtCat = id;
+    evtBrushes.querySelectorAll('.brush').forEach((b) => {
+      const on = b.dataset.cat === id;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-checked', on);
+    });
+  }
+
+  function syncEvtFields() {
+    const c = evtColumn();
+    if (!c) return;
+    const allDay = evtAllDay.checked;
+    evtStartTime.hidden = evtEndTime.hidden = allDay;
+    $('#evt-end-label').textContent = allDay ? 'Last day' : 'Ends';
+    $('#evt-tz').textContent = (allDay ? 'Whole days' : 'Times') + ' in ' + displayName(c) + '’s time zone · '
+      + c.tz.replace(/_/g, ' ') + ' (' + formatOffset(offsetMinutes(c.tz, Date.now())) + ')';
+  }
+
+  // `event` to edit an existing one; otherwise `start` / `end` prefill a new one.
+  function openEventDialog({ colId, event, start, end }) {
+    const editable = allColumns().filter(canEdit);
+    const c = editable.find((x) => x.id === colId);
+    if (!c) return;
+    evtWho.replaceChildren(...editable.map((x) => new Option(displayName(x) + ' — ' + x.city, x.id)));
+    evtWho.value = c.id;
+    $('#evt-who-field').hidden = editable.length < 2;
+    evtEdit = { colId: c.id, id: event ? event.id : null };
+    const s = event ? event.start : start;
+    const e = event ? event.end : end;
+    const allDay = !!event && isAllDay(event, c.tz);
+    evtAllDay.checked = allDay;
+    const a = toInputs(s, c.tz);
+    const b = toInputs(allDay ? e - 60000 : e, c.tz);
+    evtStartDate.value = a.date;
+    evtStartTime.value = a.time;
+    evtEndDate.value = b.date;
+    evtEndTime.value = b.time;
+    evtNote.value = (event && event.note) || '';
+    setEvtCat(event ? event.cat : 'busy');
+    $('#evt-title').textContent = event ? 'Edit event' : 'New event';
+    $('#evt-kicker').textContent = 'ONE-OFF // ' + displayName(c).toUpperCase();
+    $('#evt-delete').hidden = !event;
+    evtError.hidden = true;
+    syncEvtFields();
+    evtDialog.showModal();
+  }
+
+  evtAllDay.addEventListener('change', () => {
+    // An end at midnight means the day before was the last full day.
+    if (evtAllDay.checked && evtEndTime.value === '00:00' && evtEndDate.value > evtStartDate.value) {
+      evtEndDate.value = new Date(inputDay(evtEndDate.value) - DAY_MS).toISOString().slice(0, 10);
+    }
+    syncEvtFields();
+  });
+  evtWho.addEventListener('change', () => {
+    $('#evt-kicker').textContent = 'ONE-OFF // ' + displayName(evtColumn()).toUpperCase();
+    syncEvtFields();
+  });
+  // Keep the end after the start while editing the start.
+  function nudgeEnd() {
+    if (evtEndDate.value < evtStartDate.value) evtEndDate.value = evtStartDate.value;
+    if (!evtAllDay.checked && evtEndDate.value === evtStartDate.value && evtEndTime.value <= evtStartTime.value) {
+      const c = evtColumn();
+      const b = toInputs(fromInputs(evtStartDate.value, evtStartTime.value, c.tz) + HOUR, c.tz);
+      evtEndDate.value = b.date;
+      evtEndTime.value = b.time;
+    }
+  }
+  evtStartDate.addEventListener('change', nudgeEnd);
+  evtStartTime.addEventListener('change', nudgeEnd);
+
+  function evtFail(msg) {
+    evtError.textContent = msg;
+    evtError.hidden = false;
+  }
+
+  function afterEventChange() {
+    saveCities();
+    renderView();
+    if (colDialog.open) paintEventList();
+  }
+
+  $('#evt-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const c = evtColumn();
+    if (!c || !canEdit(c)) return;
+    const tz = c.tz;
+    let start, end;
+    if (evtAllDay.checked) {
+      start = localToUtc(tz, inputDay(evtStartDate.value));
+      end = localToUtc(tz, inputDay(evtEndDate.value) + DAY_MS);
+    } else {
+      start = fromInputs(evtStartDate.value, evtStartTime.value, tz);
+      end = fromInputs(evtEndDate.value, evtEndTime.value, tz);
+    }
+    const now = Date.now();
+    if (isNaN(start) || isNaN(end)) return evtFail('Pick when it starts and ends.');
+    if (end <= start) return evtFail('It has to end after it starts.');
+    if (end - start > EVENTS.maxDays * DAY_MS) return evtFail('Events can last up to ' + EVENTS.maxDays + ' days.');
+    if (end < now - EVENTS.keepDays * DAY_MS) return evtFail('That’s over a week ago — past events are cleared after ' + EVENTS.keepDays + ' days.');
+    if (start > now + EVENTS.aheadDays * DAY_MS) return evtFail('That’s too far ahead (up to 2 years).');
+
+    const id = evtEdit.id || newId();
+    const others = c.events.filter((x) => x.id !== id);
+    if (others.length >= EVENTS.perColumn) return evtFail(displayName(c) + ' already has ' + EVENTS.perColumn + ' one-off events — delete a few first.');
+    const ev = { id, start, end, cat: evtCat };
+    const note = evtNote.value.trim().slice(0, EVENTS.note);
+    if (note) ev.note = note;
+    // Moved to another person: take it off the original column.
+    const prev = allColumns().find((x) => x.id === evtEdit.colId);
+    if (prev && prev !== c) prev.events = prev.events.filter((x) => x.id !== id);
+    c.events = [...others, ev].sort((x, y) => x.start - y.start);
+    evtDialog.close();
+    afterEventChange();
+    toast((evtEdit.id ? 'Updated ' : 'Added ') + catLabel(ev.cat).toLowerCase() + ' for ' + displayName(c) + ' · ' + eventWhen(ev, tz));
+  });
+
+  $('#evt-delete').addEventListener('click', () => {
+    const c = allColumns().find((x) => x.id === evtEdit.colId);
+    if (!c) return;
+    c.events = c.events.filter((x) => x.id !== evtEdit.id);
+    evtDialog.close();
+    afterEventChange();
+    toast('Event deleted');
+  });
+
+  // Upcoming events in the column editor (read-only on others' columns).
+  function paintEventList() {
+    const c = editCity();
+    if (!c) return;
+    const editable = canEdit(c);
+    const list = $('#col-events');
+    const now = Date.now();
+    const upcoming = c.events.filter((e) => e.end > now);
+    list.replaceChildren();
+    if (!upcoming.length) {
+      list.append(el('li', 'evt-empty', editable
+        ? 'Nothing coming up. Tap an hour on the board and pick “Just <date>”, or add one here.'
+        : 'Nothing coming up.'));
+    }
+    for (const e of upcoming) {
+      const li = el('li', 'evt-row cat-' + e.cat);
+      const body = editable ? button('evt-open', null, { title: 'Edit event' }) : el('div', 'evt-open');
+      const main = el('span', 'evt-main');
+      main.append(el('span', 'evt-when', eventWhen(e, c.tz)), el('span', 'evt-what', catLabel(e.cat) + (e.note ? ' · ' + e.note : '')));
+      body.append(el('i', 'menu-swatch'), main);
+      if (e.start <= now) body.append(el('span', 'evt-live', 'NOW'));
+      li.append(body);
+      if (editable) {
+        body.addEventListener('click', () => openEventDialog({ colId: c.id, event: e }));
+        const del = button('mini-btn danger', '✕', { title: 'Delete event', 'aria-label': 'Delete event' });
+        del.addEventListener('click', () => {
+          c.events = c.events.filter((x) => x !== e);
+          afterEventChange();
+        });
+        li.append(del);
+      }
+      list.append(li);
+    }
+    $('#col-add-event').hidden = !editable;
+    $('#col-events-hint').textContent = editable ? '· override the weekly schedule on specific dates; cleared a week after they end' : '';
+  }
+
+  $('#col-add-event').addEventListener('click', () => {
+    const c = editCity();
+    // Default: the next full hour, for an hour.
+    const start = Math.ceil(Date.now() / HOUR) * HOUR;
+    openEventDialog({ colId: c.id, start, end: start + HOUR });
+  });
 
   // ---------- Status colors ----------
 
@@ -1180,7 +1911,7 @@
     }
     const day = el('span', 'legend-note');
     day.append(el('i', 'chip ahead', 'Sun'), ' different day');
-    const hint = el('span', 'legend-hint', 'Tap a cell to set status · tap a name to rename · drag a header to reorder');
+    const hint = el('span', 'legend-hint', 'Tap a cell to set status or add a one-off · tap a name to rename · drag a header to reorder');
     legend.append(keys, day, hint);
   })();
 
@@ -1283,8 +2014,8 @@
 
   $('#view-toggle').addEventListener('click', () => {
     const next = root.dataset.view === 'stack' ? 'grid' : 'stack';
-    root.dataset.view = next;
     localStorage.setItem(VIEW_KEY, next);
+    applyViewMode();
     closeCellMenu();
     if (next === 'grid') scrollCurrentIntoView();
   });
@@ -1309,7 +2040,7 @@
   const POLL_IDLE = 90000; // no interaction for IDLE_AFTER
   const IDLE_AFTER = 5 * 60000;
   const SLEEP_AFTER = 30 * 60000; // stop polling until the next interaction
-  const SHARED = ['label', 'schedule', 'workDays', 'ownerId']; // synced to everyone
+  const SHARED = ['label', 'schedule', 'workDays', 'events', 'ownerId']; // synced to everyone
 
   const syncBtn = $('#sync-btn');
   const syncDialog = $('#sync-dialog');
@@ -1333,6 +2064,46 @@
   }
 
   const snap = (c) => JSON.stringify(SHARED.map((k) => c[k] ?? null));
+  const unsnap = (s) => Object.fromEntries(JSON.parse(s).map((v, i) => [SHARED[i], v]));
+
+  // What changed in column `c` since `old` (an unsnapped copy), or null. Only
+  // the differences are sent: single hours, single days, and events added,
+  // edited or deleted by id. The server applies them to its current copy, so
+  // edits to the same column from two people merge instead of overwriting.
+  function diffCol(old, c) {
+    const p = {};
+    for (const k of ['label', 'ownerId']) if ((old[k] ?? null) !== (c[k] ?? null)) p[k] = c[k] ?? null;
+    const oldSchedule = old.schedule || [];
+    const hours = {};
+    c.schedule.forEach((cat, h) => { if (cat !== (oldSchedule[h] ?? null)) hours[h] = cat; });
+    if (Object.keys(hours).length) p.schedule = hours;
+    const oldDays = old.workDays || [];
+    const days = {};
+    for (let d = 0; d < 7; d++) if (c.workDays.includes(d) !== oldDays.includes(d)) days[d] = c.workDays.includes(d);
+    if (Object.keys(days).length) p.workDays = days;
+    const before = new Map((old.events || []).map((e) => [e.id, JSON.stringify(e)]));
+    const ids = new Set(c.events.map((e) => e.id));
+    const put = c.events.filter((e) => before.get(e.id) !== JSON.stringify(e));
+    const del = [...before.keys()].filter((id) => !ids.has(id));
+    if (put.length || del.length) p.events = { put, del };
+    return Object.keys(p).length ? p : null;
+  }
+
+  // Apply a diffCol() result to column `c` (what the server does, too).
+  function applyDiff(c, p) {
+    for (const k of ['label', 'ownerId']) if (k in p) { if (p[k]) c[k] = p[k]; else delete c[k]; }
+    if (p.schedule) for (const h in p.schedule) c.schedule[h] = p.schedule[h];
+    if (p.workDays) {
+      const days = new Set(c.workDays);
+      for (const d in p.workDays) { if (p.workDays[d]) days.add(+d); else days.delete(+d); }
+      c.workDays = [...days].sort();
+    }
+    if (p.events) {
+      const byId = new Map(c.events.filter((e) => !p.events.del.includes(e.id)).map((e) => [e.id, e]));
+      for (const e of p.events.put) byId.set(e.id, e);
+      c.events = cleanEvents([...byId.values()]);
+    }
+  }
 
   // This person's view: column order, hidden columns and header colors.
   function currentView() {
@@ -1406,8 +2177,14 @@
       const server = new Map(state.columns.map((c) => [c.id, sanitizeCity(c)]));
       const merge = (lc) => {
         const sc = server.get(lc.id);
-        if (!sc) return sent.cols.has(lc.id) ? null : lc; // removed by someone else / added meanwhile
-        if (snap(lc) === sent.cols.get(lc.id)) for (const k of SHARED) { if (sc[k] === undefined) delete lc[k]; else lc[k] = sc[k]; }
+        const sentSnap = sent.cols.get(lc.id);
+        if (!sc) return sentSnap !== undefined ? null : lc; // removed by someone else / added meanwhile
+        if (sentSnap === undefined) return lc;
+        // Take the server's copy (which includes other people's changes), then
+        // replay anything edited here while the save was in flight.
+        const pending = snap(lc) === sentSnap ? null : diffCol(unsnap(sentSnap), lc);
+        for (const k of SHARED) { if (sc[k] === undefined) delete lc[k]; else lc[k] = structuredClone(sc[k]); }
+        if (pending) applyDiff(lc, pending);
         return lc;
       };
       visible = cities.map(merge).filter(Boolean);
@@ -1448,10 +2225,8 @@
       const prev = sync.base.get(c.id);
       if (prev === undefined) { create.push(c); continue; }
       if (prev === snap(c)) continue;
-      const old = JSON.parse(prev);
-      const p = { id: c.id };
-      SHARED.forEach((k, i) => { if (JSON.stringify(old[i]) !== JSON.stringify(c[k] ?? null)) p[k] = c[k] ?? null; });
-      patch.push(p);
+      const p = diffCol(unsnap(prev), c);
+      if (p) patch.push({ id: c.id, ...p });
     }
     const remove = [...sync.base.keys()].filter((id) => !ids.has(id));
     const view = JSON.stringify(currentView());
@@ -1811,7 +2586,7 @@
       const name = input({ placeholder: 'Board name', maxLength: 40 });
       const create = button('btn', 'Create');
       const doCreate = () => attempt(create, err, async () => {
-        const { board } = await api('createBoard', { name: name.value, columns: cities });
+        const { board } = await api('createBoard', { name: name.value, columns: cities.map(({ events, ...c }) => c) }); // events stay local, keeping the request small
         await refreshMe();
         await openBoard(board.id);
         renderSyncDialog('boards');

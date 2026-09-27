@@ -12,7 +12,10 @@ import {
   SESSION_COOKIE, SESSION_DAYS, randomToken, newId, sha256, hashPassword, verifyPassword,
   safeEqual, readCookie, sessionCookie, clientIp, sameOrigin, memLimit, dbLimit,
 } from './_lib/security.js';
-import { cleanColumn, cleanLabel, cleanColor, cleanSchedule, cleanWorkDays, cleanView, validId } from './_lib/columns.js';
+import {
+  cleanColumn, cleanLabel, cleanColor, cleanEvents, withEvents, cleanView, validId,
+  patchSchedule, patchWorkDays, patchEvents, EVENT_LIMITS,
+} from './_lib/columns.js';
 
 // Hard caps keep storage, row reads and abuse bounded.
 const LIMITS = {
@@ -173,6 +176,83 @@ async function findInvite(token) {
   return { hash: sha256(token), boardId: inv.board_id, userId: inv.user_id, boardName: inv.board_name, username: inv.username };
 }
 
+// ---------- Saving column changes ----------
+
+// Another save changed a row between our read and our write.
+class StaleWrite extends Error {}
+
+// Runs after a conditional UPDATE: if it matched no row, json() of a
+// non-JSON string raises an error, which aborts and rolls back the batch.
+const GUARD = { sql: "SELECT json(CASE WHEN changes() = 0 THEN 'stale' ELSE '1' END)", args: [] };
+
+async function applyChanges(board, user, memberIds, { create, patch, remove, view }) {
+  const rows = await all('SELECT id, pos, owner_id, data FROM columns WHERE board_id = ? ORDER BY pos', [board.id]);
+  const cols = new Map(rows.map((r) => [r.id, { ownerId: r.owner_id || null, raw: r.data, data: JSON.parse(r.data) }]));
+  const canEdit = (c) => user.isAdmin || c.ownerId === user.id;
+  const stmts = [];
+
+  for (const id of remove) {
+    if (!cols.has(id)) continue; // already gone
+    cols.delete(id);
+    stmts.push({ sql: 'DELETE FROM columns WHERE id = ?', args: [id] });
+  }
+
+  for (const p of patch) {
+    const c = p && cols.get(p.id);
+    if (!c) fail(409, 'A column you edited was removed by someone else.');
+    if (!canEdit(c)) fail(403, 'You can only edit your own column.');
+    const d = c.data;
+    const before = c.ownerId;
+    if ('label' in p) { const v = cleanLabel(p.label); if (v) d.label = v; else delete d.label; }
+    if ('schedule' in p) d.schedule = patchSchedule(d.schedule, p.schedule);
+    if ('workDays' in p) d.workDays = patchWorkDays(d.workDays, p.workDays);
+    // The row is rewritten anyway, so prune expired events for free.
+    const events = 'events' in p ? patchEvents(d.events, p.events) : cleanEvents(d.events);
+    if (!events) fail(400, `Each person can have up to ${EVENT_LIMITS.perColumn} one-off events — delete a few first.`);
+    delete d.events;
+    Object.assign(d, withEvents(events));
+    if ('ownerId' in p && p.ownerId !== c.ownerId) {
+      if (!user.isAdmin) fail(403, 'Only the admin can reassign columns.');
+      if (p.ownerId !== null && !memberIds.has(p.ownerId)) fail(400, 'That person isn’t on this board.');
+      c.ownerId = p.ownerId;
+    }
+    stmts.push({
+      sql: 'UPDATE columns SET data = ?, owner_id = ? WHERE id = ? AND data = ? AND owner_id IS ?',
+      args: [JSON.stringify(d), c.ownerId, p.id, c.raw, before],
+    }, GUARD);
+  }
+
+  let nextPos = rows.reduce((m, r) => Math.max(m, Number(r.pos)), -1) + 1;
+  for (const raw of create) {
+    const data = cleanColumn(raw);
+    if (!data || !validId(raw.id) || cols.has(raw.id)) fail(400, 'Invalid new column.');
+    const ownerId = raw.ownerId && memberIds.has(raw.ownerId) ? raw.ownerId : null;
+    cols.set(raw.id, { ownerId, data });
+    stmts.push({ sql: 'INSERT INTO columns (id, board_id, pos, owner_id, data) VALUES (?, ?, ?, ?, ?)', args: [raw.id, board.id, nextPos++, ownerId, JSON.stringify(data)] });
+  }
+
+  if (cols.size === 0) fail(400, 'A board needs at least one column.');
+  if (cols.size > LIMITS.columnsPerBoard) fail(403, `Boards are limited to ${LIMITS.columnsPerBoard} columns.`);
+  // Each person manages exactly one column per board.
+  const owners = [...cols.values()].map((c) => c.ownerId).filter(Boolean);
+  if (new Set(owners).size !== owners.length) fail(400, 'Each person can only be assigned one column.');
+
+  // Shared changes bump the board version so everyone's poll picks them up.
+  const shared = stmts.length > 0;
+  if (shared) stmts.push(bump(board.id));
+  // A personal view only matters to its owner, so it doesn't bump the version.
+  if (view) stmts.push(saveView(board.id, user.id, cleanView(view, new Set(cols.keys()))));
+  if (!stmts.length) return;
+
+  try { await batch(stmts); } catch (err) {
+    const msg = String(err && err.message);
+    if (/malformed JSON/i.test(msg)) throw new StaleWrite();
+    if (/UNIQUE|PRIMARY KEY/i.test(msg)) fail(409, 'Conflicting change — reloading.');
+    throw err;
+  }
+  if (shared) board.version++;
+}
+
 // ---------- Operations ----------
 
 const GET = {
@@ -283,6 +363,10 @@ const POST = {
 
   // Apply a batch of changes from one client in a single request.
   // Body: { boardId, create: [col], patch: [{ id, ...fields }], remove: [id], view?: { order, hidden, colors } }
+  // Saves are change-based: `patch` carries only what changed (single hours,
+  // days, and events added / edited / deleted by id), applied to the columns as
+  // they are stored now. Each row is written only if it still matches what was
+  // read, so a save that raced another is re-applied instead of undoing it.
   async sync(ctx) {
     const user = await requireUser(ctx);
     await writeLimit(user);
@@ -291,65 +375,20 @@ const POST = {
     if (![create, patch, remove].every(Array.isArray)) fail(400, 'Malformed changes.');
     if (!user.isAdmin && (create.length || remove.length)) fail(403, 'Only the admin can add or remove columns.');
     if (create.length + patch.length + remove.length > 100) fail(400, 'Too many changes at once.');
-
-    const rows = await all('SELECT id, pos, owner_id, data FROM columns WHERE board_id = ? ORDER BY pos', [board.id]);
-    const cols = new Map(rows.map((r) => [r.id, { ownerId: r.owner_id || null, data: JSON.parse(r.data) }]));
     const memberIds = new Set((await boardMembers(board.id)).map((m) => m.id));
-    const canEdit = (c) => user.isAdmin || c.ownerId === user.id;
-    const stmts = [];
 
-    for (const id of remove) {
-      const c = cols.get(id);
-      if (!c) continue; // already gone
-      cols.delete(id);
-      stmts.push({ sql: 'DELETE FROM columns WHERE id = ?', args: [id] });
-    }
-
-    for (const p of patch) {
-      const c = p && cols.get(p.id);
-      if (!c) fail(409, 'A column you edited was removed by someone else.');
-      if (!canEdit(c)) fail(403, 'You can only edit your own column.');
-      const d = c.data;
-      if ('label' in p) { const v = cleanLabel(p.label); if (v) d.label = v; else delete d.label; }
-      if ('schedule' in p) d.schedule = cleanSchedule(p.schedule) || d.schedule;
-      if ('workDays' in p) d.workDays = cleanWorkDays(p.workDays) || d.workDays;
-      if ('ownerId' in p && p.ownerId !== c.ownerId) {
-        if (!user.isAdmin) fail(403, 'Only the admin can reassign columns.');
-        if (p.ownerId !== null && !memberIds.has(p.ownerId)) fail(400, 'That person isn’t on this board.');
-        c.ownerId = p.ownerId;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await applyChanges(board, user, memberIds, { create, patch, remove, view });
+        return boardState(board, user);
+      } catch (err) {
+        if (!(err instanceof StaleWrite)) throw err;
+        console.warn(`sync: board ${board.id} changed mid-save, retry ${attempt}`);
+        if (attempt === 4) fail(503, 'Lots of people saving at once.'); // the client keeps the edit and resends
+        // A random pause so saves that collided don't collide again in lockstep.
+        await new Promise((r) => setTimeout(r, 15 + Math.random() * 50 * attempt));
       }
-      stmts.push({ sql: 'UPDATE columns SET data = ?, owner_id = ? WHERE id = ?', args: [JSON.stringify(d), c.ownerId, p.id] });
     }
-
-    let nextPos = rows.reduce((m, r) => Math.max(m, Number(r.pos)), -1) + 1;
-    for (const raw of create) {
-      const data = cleanColumn(raw);
-      if (!data || !validId(raw.id) || cols.has(raw.id)) fail(400, 'Invalid new column.');
-      const ownerId = raw.ownerId && memberIds.has(raw.ownerId) ? raw.ownerId : null;
-      cols.set(raw.id, { ownerId, data });
-      stmts.push({ sql: 'INSERT INTO columns (id, board_id, pos, owner_id, data) VALUES (?, ?, ?, ?, ?)', args: [raw.id, board.id, nextPos++, ownerId, JSON.stringify(data)] });
-    }
-
-    if (cols.size === 0) fail(400, 'A board needs at least one column.');
-    if (cols.size > LIMITS.columnsPerBoard) fail(403, `Boards are limited to ${LIMITS.columnsPerBoard} columns.`);
-    // Each person manages exactly one column per board.
-    const owners = [...cols.values()].map((c) => c.ownerId).filter(Boolean);
-    if (new Set(owners).size !== owners.length) fail(400, 'Each person can only be assigned one column.');
-
-    // Shared changes bump the board version so everyone's poll picks them up.
-    const shared = stmts.length > 0;
-    if (shared) stmts.push(bump(board.id));
-    // A personal view only matters to its owner, so it doesn't bump the version.
-    if (view) stmts.push(saveView(board.id, user.id, cleanView(view, new Set(cols.keys()))));
-
-    if (stmts.length) {
-      try { await batch(stmts); } catch (err) {
-        if (/UNIQUE|PRIMARY KEY/i.test(String(err && err.message))) fail(409, 'Conflicting change — reloading.');
-        throw err;
-      }
-      if (shared) board.version++;
-    }
-    return boardState(board, user);
   },
 
   // ----- Admin -----

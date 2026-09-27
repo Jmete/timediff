@@ -14,7 +14,9 @@
     // Apply the saved theme (dark by default) before first paint to avoid a flash.
     document.documentElement.dataset.theme = localStorage.getItem('timediff.theme') || 'dark';
     // Mobile layout: full hourly grid (default) or current times stacked vertically.
-    document.documentElement.dataset.view = localStorage.getItem('timediff.view') || 'grid';
+    // Calendar range: day (hourly grid), week or month. The stacked layout is day-only.
+    document.documentElement.dataset.range = localStorage.getItem('timediff.range') || 'day';
+    document.documentElement.dataset.view = document.documentElement.dataset.range === 'day' && localStorage.getItem('timediff.view') || 'grid';
   </script>
 </head>
 <body>
@@ -32,6 +34,19 @@
       <div class="wordmark">
         <span class="wm-main">TIME<span class="wm-slash">/</span>DIFF</span>
         <span class="wm-sub">MULTI-ZONE CHRONO <span class="wm-sep">//</span> <span id="wm-count">06</span> NODES</span>
+      </div>
+    </div>
+    <div class="viewbar">
+      <div class="seg" id="range-seg" role="group" aria-label="Calendar view">
+        <button type="button" data-range="day" title="Day — hour by hour (D)">Day</button>
+        <button type="button" data-range="week" title="Week — everyone side by side (W)">Week</button>
+        <button type="button" data-range="month" title="Month — everyone's days at a glance (M)">Month</button>
+      </div>
+      <div class="view-nav">
+        <button id="nav-prev" class="nav-btn" type="button" aria-label="Previous" title="Previous (←)">‹</button>
+        <button id="nav-today" class="today-btn" type="button" title="Back to today (T)">Today</button>
+        <button id="nav-next" class="nav-btn" type="button" aria-label="Next" title="Next (→)">›</button>
+        <span class="nav-label" id="nav-label" aria-live="polite"></span>
       </div>
     </div>
     <div class="actions">
@@ -62,12 +77,14 @@
   </header>
 
   <main>
+    <div class="cal-key" id="cal-key" hidden></div>
     <div class="frame">
       <div class="board" id="board">
         <table class="grid" id="grid">
           <thead><tr id="head-row"></tr></thead>
           <tbody id="body-rows"></tbody>
         </table>
+        <div class="cal" id="cal" hidden></div>
       </div>
     </div>
     <div class="bottombar">
@@ -134,6 +151,13 @@
             <button id="days-all" class="text-btn" type="button">Every day</button>
           </div>
         </div>
+        <div class="field" id="col-events-field">
+          <span class="field-label">One-off events <em id="col-events-hint"></em></span>
+          <ul class="evt-list" id="col-events"></ul>
+          <div class="row-btns">
+            <button id="col-add-event" class="text-btn" type="button">+ Add event</button>
+          </div>
+        </div>
       </div>
       <div class="dlg-foot">
         <button id="col-remove" class="btn danger" type="button">Remove</button>
@@ -143,6 +167,53 @@
         <button class="btn primary" type="button" data-close>Done</button>
       </div>
     </div>
+  </dialog>
+
+  <!-- One-off event -->
+  <dialog id="evt-dialog" class="dlg">
+    <form class="dlg-inner" id="evt-form" novalidate>
+      <div class="dlg-head">
+        <div><span class="kicker" id="evt-kicker">ONE-OFF</span><h2 id="evt-title">New event</h2></div>
+        <button class="icon-btn ghost" type="button" data-close aria-label="Close">✕</button>
+      </div>
+      <div class="dlg-body">
+        <label class="field" id="evt-who-field">
+          <span class="field-label">Who</span>
+          <select id="evt-who" class="text-input"></select>
+        </label>
+        <div class="field">
+          <span class="field-label">Status</span>
+          <div class="brushes" id="evt-brushes" role="radiogroup" aria-label="Status"></div>
+        </div>
+        <div class="field">
+          <label class="check"><input type="checkbox" id="evt-allday" /> <span>All day</span></label>
+          <div class="when-grid">
+            <span class="field-label">Starts</span>
+            <div class="when-row">
+              <input id="evt-start-date" class="text-input" type="date" required />
+              <input id="evt-start-time" class="text-input" type="time" step="900" required />
+            </div>
+            <span class="field-label" id="evt-end-label">Ends</span>
+            <div class="when-row">
+              <input id="evt-end-date" class="text-input" type="date" required />
+              <input id="evt-end-time" class="text-input" type="time" step="900" required />
+            </div>
+          </div>
+          <span class="field-hint" id="evt-tz"></span>
+        </div>
+        <label class="field">
+          <span class="field-label">Note <em>· optional; everyone on a shared board sees it</em></span>
+          <input id="evt-note" class="text-input" type="text" maxlength="60" autocomplete="off" placeholder="e.g. Dentist, Flight, Vacation" />
+        </label>
+        <p class="form-error" id="evt-error" hidden></p>
+      </div>
+      <div class="dlg-foot">
+        <button id="evt-delete" class="btn danger" type="button">Delete</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-close>Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
   </dialog>
 
   <!-- Status colors -->
