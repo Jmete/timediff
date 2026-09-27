@@ -408,7 +408,6 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 18px;
-  margin: 14px 2px 0;
   font-size: 14.5px;
   color: var(--muted);
 }
@@ -434,13 +433,25 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 }
 .legend-note { display: inline-flex; align-items: center; gap: 2px; }
 .legend-note .chip { margin: 0 4px 0 0; }
-.legend-hint { font-family: var(--mono); font-size: 13px; letter-spacing: .04em; color: var(--faint); }
+.legend-hint {
+  /* Zero basis: truncates rather than wrapping when the bottom bar gets tight */
+  flex: 1 1 0; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono); font-size: 13px; letter-spacing: .04em; color: var(--faint);
+}
 
-/* ---------- Credit ---------- */
+/* ---------- Bottom bar: legend · credit · reset ---------- */
+
+.bottombar {
+  display: flex;
+  align-items: center;
+  gap: 10px 24px;
+  margin: 14px 2px 0;
+}
+.bottombar .legend { flex: 1; min-width: 0; }
 
 .credit {
-  margin-top: 14px;
-  text-align: center;
+  white-space: nowrap;
   font-family: var(--mono);
   font-size: 12px;
   letter-spacing: .06em;
@@ -449,13 +460,10 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .credit a { color: inherit; text-decoration: none; border-bottom: 1px solid transparent; transition: color .15s, border-color .15s; }
 .credit a:hover { color: var(--text); border-bottom-color: currentColor; }
 
-/* ---------- Reset (bottom-right corner) ---------- */
+/* ---------- Reset ---------- */
 
 .reset-btn {
-  position: fixed;
-  right: clamp(12px, 2vw, 22px);
-  bottom: clamp(12px, 2vw, 18px);
-  z-index: 10;
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -774,6 +782,11 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 
   main { padding-bottom: 60px; }
 
+  /* Credit and reset pin to the bottom corners, sharing one line */
+  .credit, .reset-btn { position: fixed; bottom: 12px; z-index: 10; }
+  .credit { left: 14px; line-height: 33px; }
+  .reset-btn { right: 12px; }
+
   .grid th, .grid td { min-width: 150px; }
   .grid thead th { padding: 8px 12px 12px; }
   .grid tbody td { padding: 0 12px; height: 48px; }
@@ -805,6 +818,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 
 @media (max-width: 640px) {
   [data-view="stack"] .legend { display: none; }
+  [data-view="stack"] .bottombar { margin: 0; }
   [data-view="stack"] .frame { min-height: 0; }
   [data-view="stack"] .board { display: flex; }
 
