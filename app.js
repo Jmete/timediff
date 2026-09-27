@@ -245,6 +245,7 @@
   const clockEls = [];
 
   const ICON_EDIT = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="miter"/></svg>';
+  const ICON_GRIP = '<svg viewBox="0 0 10 16" width="8" height="13" aria-hidden="true"><path d="M2 2h2v2H2zM6 2h2v2H6zM2 7h2v2H2zM6 7h2v2H6zM2 12h2v2H2zM6 12h2v2H6z" fill="currentColor"/></svg>';
 
   function toolBtn(label, action, idx, html, extraClass) {
     const b = button('mini-btn' + (extraClass ? ' ' + extraClass : ''), null, { title: label, 'aria-label': label });
@@ -261,6 +262,7 @@
     cities.forEach((c, i) => {
       const th = el('th');
       th.scope = 'col';
+      th.dataset.col = i;
       if (i === 0) th.classList.add('ref');
       const color = headerColorFor(c, i);
       if (color) {
@@ -270,7 +272,11 @@
       }
 
       const top = el('div', 'th-top');
+      const grip = el('span', 'grip');
+      grip.title = 'Drag to reorder';
+      grip.innerHTML = ICON_GRIP;
       const tag = el('span', 'tag', String(i + 1).padStart(2, '0'));
+      tag.prepend(grip);
       if (i === 0) tag.append(el('span', 'tag-ref', ' // REF'));
       const tools = el('div', 'col-tools');
       if (i > 0) tools.append(toolBtn('Move left' + (i === 1 ? ' (make reference)' : ''), 'left', i, '‹', 'desk'));
@@ -462,6 +468,100 @@
     saveCities();
     renderAll(false);
   }
+
+  // ---------- Drag to reorder columns ----------
+  // Mice can drag a header from anywhere; touch only from the grip, so swiping
+  // across the headers still scrolls the board.
+
+  const DRAG_THRESHOLD = 6;
+  const EDGE = 48; // auto-scroll zone at the board's edges
+  let drag = null;
+  let suppressClick = false;
+
+  const headCells = () => [...headRow.querySelectorAll('th[data-col]')];
+
+  function markCol(i, cls, on) {
+    document.querySelectorAll('.grid [data-col="' + i + '"]').forEach((c) => c.classList.toggle(cls, on));
+  }
+
+  function clearDropMarks() {
+    document.querySelectorAll('.grid .drop-before, .grid .drop-after').forEach((c) => c.classList.remove('drop-before', 'drop-after'));
+  }
+
+  // Work out where the dragged column would land and draw the insertion line.
+  function updateDropTarget() {
+    const ths = headCells();
+    const pos = drag.stacked ? drag.py : drag.px;
+    let slot = 0;
+    for (const th of ths) {
+      const r = th.getBoundingClientRect();
+      if (pos > (drag.stacked ? r.top + r.height / 2 : r.left + r.width / 2)) slot++;
+    }
+    const to = slot > drag.from ? slot - 1 : slot;
+    if (to === drag.to) return;
+    drag.to = to;
+    clearDropMarks();
+    if (to === drag.from) return;
+    if (slot < ths.length) markCol(slot, 'drop-before', true);
+    else markCol(ths.length - 1, 'drop-after', true);
+  }
+
+  function autoScroll() {
+    if (!drag || !drag.active) return;
+    const r = board.getBoundingClientRect();
+    const [pos, lo, hi] = drag.stacked ? [drag.py, r.top, r.bottom] : [drag.px, r.left, r.right];
+    const step = pos < lo + EDGE ? -1 : pos > hi - EDGE ? 1 : 0;
+    if (step) {
+      const before = drag.stacked ? board.scrollTop : board.scrollLeft;
+      if (drag.stacked) board.scrollTop += step * 14; else board.scrollLeft += step * 14;
+      if ((drag.stacked ? board.scrollTop : board.scrollLeft) !== before) updateDropTarget();
+    }
+    requestAnimationFrame(autoScroll);
+  }
+
+  function endDrag(commit) {
+    const d = drag;
+    drag = null;
+    if (!d || !d.active) return;
+    root.classList.remove('col-dragging');
+    clearDropMarks();
+    markCol(d.from, 'dragging', false);
+    // Swallow the click that follows the drop so it doesn't open the editor.
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; });
+    if (commit && d.to != null) moveCity(d.from, d.to);
+  }
+
+  headRow.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || cities.length < 2) return;
+    const th = e.target.closest('th[data-col]');
+    if (!th || e.target.closest('button')) return;
+    const onGrip = !!e.target.closest('.grip');
+    if (e.pointerType !== 'mouse' && !onGrip) return;
+    if (onGrip) e.preventDefault();
+    drag = { from: +th.dataset.col, to: null, id: e.pointerId, x: e.clientX, y: e.clientY, active: false };
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (!drag.active) {
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < DRAG_THRESHOLD) return;
+      drag.active = true;
+      drag.stacked = getComputedStyle(headRow).flexDirection === 'column';
+      closeCellMenu();
+      root.classList.add('col-dragging');
+      markCol(drag.from, 'dragging', true);
+      requestAnimationFrame(autoScroll);
+    }
+    drag.px = e.clientX;
+    drag.py = e.clientY;
+    updateDropTarget();
+  });
+  window.addEventListener('pointerup', (e) => { if (drag && e.pointerId === drag.id) endDrag(true); });
+  window.addEventListener('pointercancel', (e) => { if (drag && e.pointerId === drag.id) endDrag(false); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') endDrag(false); });
+  headRow.addEventListener('click', (e) => {
+    if (suppressClick) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
 
   headRow.addEventListener('click', (e) => {
     const t = e.target.closest('[data-action]');
@@ -961,7 +1061,7 @@
     }
     const day = el('span', 'legend-note');
     day.append(el('i', 'chip ahead', 'Sun'), ' different day');
-    const hint = el('span', 'legend-hint', 'Tap a cell to set status · tap a name to rename');
+    const hint = el('span', 'legend-hint', 'Tap a cell to set status · tap a name to rename · drag a header to reorder');
     legend.append(keys, day, hint);
   })();
 

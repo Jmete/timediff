@@ -222,6 +222,17 @@ main {
   letter-spacing: 0.14em;
 }
 .tag-ref { letter-spacing: 0.1em; }
+.grip {
+  display: inline-block;
+  margin: 0 7px 0 -2px;
+  padding: 2px;
+  vertical-align: -2px;
+  opacity: .7;
+  cursor: grab;
+  touch-action: none;
+}
+.grip svg { display: block; }
+thead th:hover .grip { opacity: 1; }
 .status { display: none; }
 
 .name {
@@ -396,6 +407,23 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   background: var(--signal);
   vertical-align: 1px;
 }
+
+/* Drag to reorder columns */
+.grid thead th { user-select: none; -webkit-user-select: none; }
+.col-dragging, .col-dragging * { cursor: grabbing !important; }
+.col-dragging .grid tbody tr:hover td { --ov: none; }
+.grid .dragging { opacity: .4; }
+.grid .drop-before::after,
+.grid .drop-after::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 3px;
+  background: var(--pink);
+  pointer-events: none;
+}
+.grid .drop-before::after { left: 0; }
+.grid .drop-after::after { right: 0; }
 
 /* Sticky reference column (keeps context while scrolling sideways on phones) */
 .grid th.ref, .grid td.ref { position: sticky; left: 0; z-index: 1; }
@@ -829,7 +857,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   [data-view="stack"] .grid tbody { display: none; }
 
   [data-view="stack"] .grid thead th {
-    position: static;
+    position: relative;
     flex: 1 0 auto;
     min-width: 0;
     display: grid;
@@ -842,6 +870,10 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
     border-bottom: 1px solid var(--line);
   }
   [data-view="stack"] .grid thead th.ref { border-bottom-color: var(--line-strong); }
+  [data-view="stack"] .grid .drop-before::after,
+  [data-view="stack"] .grid .drop-after::after { left: 0; right: 0; width: auto; height: 3px; }
+  [data-view="stack"] .grid .drop-before::after { top: 0; bottom: auto; }
+  [data-view="stack"] .grid .drop-after::after { top: auto; bottom: 0; }
   [data-view="stack"] .th-top { grid-area: top; height: 24px; margin: 0; gap: 10px; justify-content: flex-start; }
   [data-view="stack"] .col-tools { margin-left: auto; }
   [data-view="stack"] .name { grid-area: name; align-self: end; }
