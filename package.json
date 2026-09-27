@@ -1,0 +1,14 @@
+{
+  "name": "timediff",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.15.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

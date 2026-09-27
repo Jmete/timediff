@@ -1,0 +1,4 @@
+scripts/
+*.db
+*.db-*
+.env*

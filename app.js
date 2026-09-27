@@ -200,6 +200,7 @@
     out.workDays = Array.isArray(c.workDays)
       ? [...new Set(c.workDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
       : defaultWorkDays();
+    if (typeof c.ownerId === 'string') out.ownerId = c.ownerId; // shared boards only
     return out;
   }
 
@@ -230,8 +231,33 @@
 
   let cities = loadCities();
   let settings = loadSettings();
-  const saveCities = () => localStorage.setItem(STORAGE_KEY, JSON.stringify(cities));
   const saveSettings = () => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+
+  // Shared-board state (see "Shared boards" below). When `boardId` is set the
+  // columns come from the server and edits are synced instead of saved locally.
+  const sync = {
+    enabled: false, user: null, boards: [], boardId: null, boardName: '', members: [],
+    version: 0, base: new Map(), baseView: '', state: null,
+    hiddenCols: [], // columns hidden from this person's view (not rendered)
+    viewMine: null, // id of the column assigned to them, as last placed in their view
+    dirty: false, inflight: false, saveTimer: 0, pollTimer: 0, lastPoll: 0, lastActive: Date.now(),
+  };
+
+  function saveCities() {
+    if (sync.boardId) queueSync();
+    else localStorage.setItem(STORAGE_KEY, JSON.stringify(cities));
+  }
+
+  // Permissions on shared boards. Everything is allowed on the local board.
+  // Only the admin adds, removes and assigns columns; each friend manages the one
+  // column assigned to them. `canEdit` covers a column's shared parts (name,
+  // schedule, work days); order, header colors and hidden columns are personal.
+  const inBoard = () => !!sync.boardId;
+  const isAdmin = () => !!(sync.user && sync.user.isAdmin);
+  const canEdit = (c) => !inBoard() || isAdmin() || (!!c.ownerId && c.ownerId === sync.user.id);
+  const canManage = () => !inBoard() || isAdmin(); // add / remove / assign columns
+  const memberName = (id) => (sync.members.find((m) => m.id === id) || {}).username;
+  const ownerText = (c) => (c.ownerId && memberName(c.ownerId) ? '@' + memberName(c.ownerId) + ' and the admin' : 'the admin');
 
   const displayName = (c) => c.label || c.city;
   const headerColorFor = (c, i) => c.headerColor || (i === 0 ? DEFAULT_REF_HEADER : null);
@@ -245,6 +271,7 @@
   const clockEls = [];
 
   const ICON_EDIT = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="miter"/></svg>';
+  const ICON_HIDE = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6zM4 20 20 4" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg>';
   const ICON_GRIP = '<svg viewBox="0 0 10 16" width="8" height="13" aria-hidden="true"><path d="M2 2h2v2H2zM6 2h2v2H6zM2 7h2v2H2zM6 7h2v2H6zM2 12h2v2H2zM6 12h2v2H6z" fill="currentColor"/></svg>';
 
   function toolBtn(label, action, idx, html, extraClass) {
@@ -271,24 +298,31 @@
         th.style.setProperty('--hfg', textOn(color));
       }
 
+      const editable = canEdit(c);
       const top = el('div', 'th-top');
+      const tag = el('span', 'tag', String(i + 1).padStart(2, '0'));
       const grip = el('span', 'grip');
       grip.title = 'Drag to reorder';
       grip.innerHTML = ICON_GRIP;
-      const tag = el('span', 'tag', String(i + 1).padStart(2, '0'));
       tag.prepend(grip);
       if (i === 0) tag.append(el('span', 'tag-ref', ' // REF'));
+      if (inBoard() && c.ownerId) {
+        const mine = c.ownerId === sync.user.id;
+        tag.append(el('span', 'tag-owner', mine ? ' // YOU' : ' // @' + (memberName(c.ownerId) || '?')));
+        tag.title = mine ? 'Your column' : 'Managed by @' + memberName(c.ownerId);
+      }
       const tools = el('div', 'col-tools');
       if (i > 0) tools.append(toolBtn('Move left' + (i === 1 ? ' (make reference)' : ''), 'left', i, '‹', 'desk'));
       if (i < cities.length - 1) tools.append(toolBtn('Move right', 'right', i, '›', 'desk'));
-      if (cities.length > 1) tools.append(toolBtn('Remove', 'remove', i, '✕', 'desk danger'));
-      tools.append(toolBtn('Edit name, color & schedule', 'edit', i, ICON_EDIT, 'edit'));
+      if (inBoard() && cities.length > 1) tools.append(toolBtn('Hide from my view', 'hide', i, ICON_HIDE, 'desk'));
+      if (canManage() && cities.length > 1) tools.append(toolBtn('Remove', 'remove', i, '✕', 'desk danger'));
+      tools.append(toolBtn(editable ? 'Edit name, color & schedule' : 'Color & visibility', 'edit', i, ICON_EDIT, 'edit'));
       // Current status; only shown in the stacked mobile view, where the grid is hidden.
       const status = el('span', 'status');
       top.append(tag, status, tools);
 
       const name = el('div', 'name', displayName(c));
-      name.title = displayName(c) + ' — click to edit';
+      name.title = displayName(c) + (editable ? ' — click to edit' : ' — managed by ' + ownerText(c));
       name.dataset.action = 'edit';
       name.dataset.idx = i;
       const cityCountry = !c.country ? c.city : c.country.startsWith(c.city) ? c.country : c.city + ', ' + c.country;
@@ -313,8 +347,13 @@
     const addTh = el('th', 'add-col');
     const addBtn = button('add-btn', null, { 'aria-label': 'Add city', title: 'Add city' });
     addBtn.innerHTML = '<span>+</span><small>ADD</small>';
+    addBtn.hidden = !canManage();
     addBtn.addEventListener('click', openAddDialog);
-    addTh.append(addBtn);
+    const n = inBoard() ? sync.hiddenCols.length : 0;
+    const hiddenBtn = button('hidden-btn', n + ' HIDDEN', { title: 'Show hidden columns' });
+    hiddenBtn.hidden = !n;
+    hiddenBtn.addEventListener('click', () => openHiddenMenu(hiddenBtn));
+    addTh.append(addBtn, hiddenBtn);
     headRow.append(addTh);
 
     $('#wm-count').textContent = String(cities.length).padStart(2, '0');
@@ -394,10 +433,12 @@
         if (i === 0) td.classList.add('ref');
         const cat = statusAt(c, p);
         if (cat) td.classList.add('cat', 'cat-' + cat);
+        const editable = canEdit(c);
+        if (!editable) td.classList.add('locked');
 
         const t = to12h(p.hour, p.minute);
         td.dataset.label = t.text + ' ' + t.suffix;
-        td.title = displayName(c) + ' · ' + td.dataset.label + (cat ? ' · ' + catLabel(cat) : '') + ' — click to set status';
+        td.title = displayName(c) + ' · ' + td.dataset.label + (cat ? ' · ' + catLabel(cat) : '') + (editable ? ' — click to set status' : '');
         td.append(el('span', 'time', t.text), el('span', 'suffix', t.suffix));
 
         const dayDiff = Math.round((Date.UTC(p.year, p.month - 1, p.day) - refDay) / 86400000);
@@ -458,6 +499,23 @@
     if (to < 0 || to >= cities.length || from === to) return;
     const [c] = cities.splice(from, 1);
     cities.splice(to, 0, c);
+    saveCities();
+    renderAll(false);
+  }
+
+  // Hide a column from your own view of a shared board (it stays on the board).
+  function hideCity(i) {
+    if (cities.length <= 1) return;
+    const [c] = cities.splice(i, 1);
+    sync.hiddenCols.push(c);
+    saveCities();
+    renderAll(false);
+    toast('Hid ' + displayName(c) + ' — bring it back from “HIDDEN” by the + button.');
+  }
+
+  function showCities(ids) {
+    cities.push(...sync.hiddenCols.filter((c) => ids.includes(c.id)));
+    sync.hiddenCols = sync.hiddenCols.filter((c) => !ids.includes(c.id));
     saveCities();
     renderAll(false);
   }
@@ -570,12 +628,14 @@
     switch (t.dataset.action) {
       case 'edit': openColDialog(i); break;
       case 'remove': removeCity(i); break;
+      case 'hide': hideCity(i); break;
       case 'left': moveCity(i, i - 1); break;
       case 'right': moveCity(i, i + 1); break;
     }
   });
 
   $('#reset-btn').addEventListener('click', () => {
+    if (inBoard()) return;
     if (!confirm('Reset cities, names, schedules and colors to the defaults?')) return;
     cities = defaultCities();
     settings = { colors: { ...DEFAULT_COLORS } };
@@ -712,6 +772,7 @@
 
   async function importFile(file) {
     if (!file) return;
+    if (inBoard()) { toast('Switch to “This device” (top right) to import a config.', true); return; }
     try {
       if (file.size > 1024 * 1024) throw new Error('File is too large to be a config.');
       const cfg = parseConfig(await file.text());
@@ -803,10 +864,13 @@
     edit.addEventListener('click', () => { closeCellMenu(); openColDialog(col); });
     cellMenu.append(clear, el('div', 'menu-sep'), edit);
 
-    cellMenu.hidden = false;
     menuTd = td;
     td.classList.add('menu-open');
-    const r = td.getBoundingClientRect();
+    showMenuAt(td.getBoundingClientRect());
+  }
+
+  function showMenuAt(r) {
+    cellMenu.hidden = false;
     const mw = cellMenu.offsetWidth, mh = cellMenu.offsetHeight;
     const left = Math.min(Math.max(8, r.left), innerWidth - mw - 8);
     let top = r.bottom + 4;
@@ -814,6 +878,25 @@
     cellMenu.style.left = left + 'px';
     cellMenu.style.top = top + 'px';
     cellMenu.querySelector('.menu-item').focus({ preventScroll: true });
+  }
+
+  // Lists the columns hidden from your view so you can bring them back.
+  function openHiddenMenu(anchor) {
+    closeCellMenu();
+    const head = el('div', 'menu-head');
+    head.append(el('span', 'menu-name', 'Hidden'), el('span', 'menu-time', String(sync.hiddenCols.length)));
+    cellMenu.replaceChildren(head);
+    for (const c of sync.hiddenCols) {
+      const b = button('menu-item', displayName(c), { role: 'menuitem', title: 'Show ' + displayName(c) });
+      b.addEventListener('click', () => { closeCellMenu(); showCities([c.id]); });
+      cellMenu.append(b);
+    }
+    if (sync.hiddenCols.length > 1) {
+      const all = button('menu-item link', 'Show all');
+      all.addEventListener('click', () => { closeCellMenu(); showCities(sync.hiddenCols.map((c) => c.id)); });
+      cellMenu.append(el('div', 'menu-sep'), all);
+    }
+    showMenuAt(anchor.getBoundingClientRect());
   }
 
   function closeCellMenu() {
@@ -826,6 +909,8 @@
   bodyRows.addEventListener('click', (e) => {
     const td = e.target.closest('td[data-col]');
     if (!td) return;
+    const c = cities[+td.dataset.col];
+    if (!canEdit(c)) { closeCellMenu(); toast('Only ' + ownerText(c) + ' can edit ' + displayName(c) + '’s schedule.'); return; }
     if (menuTd === td) closeCellMenu();
     else openCellMenu(td);
   });
@@ -976,11 +1061,27 @@
   });
   colName.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); colDialog.close(); } });
 
+  const colOwner = $('#col-owner');
+  colOwner.addEventListener('change', () => {
+    const c = editCity();
+    // A person manages one column per board, so this moves them off any other.
+    for (const o of [...cities, ...sync.hiddenCols]) if (colOwner.value && o.ownerId === colOwner.value) delete o.ownerId;
+    if (colOwner.value) c.ownerId = colOwner.value; else delete c.ownerId;
+    saveCities();
+    renderAll(false);
+  });
+
   $('#col-remove').addEventListener('click', () => {
     const i = editIdx();
     if (i < 0) return;
     colDialog.close();
     removeCity(i);
+  });
+  $('#col-hide').addEventListener('click', () => {
+    const i = editIdx();
+    if (i < 0) return;
+    colDialog.close();
+    hideCity(i);
   });
   $('#col-makeref').addEventListener('click', () => {
     const i = editIdx();
@@ -992,13 +1093,31 @@
     const i = editIdx();
     const c = cities[i];
     if (!c) return;
+    // On shared boards, others' columns only offer the personal view settings.
+    const editable = canEdit(c);
+    $('#col-title').textContent = editable ? 'Edit column' : 'Column view';
+    for (const id of ['#col-name-field', '#col-sched-field', '#col-days-field']) $(id).hidden = !editable;
+    $('#col-color-hint').textContent = inBoard() ? '· only you see this' : '';
     $('#col-kicker').textContent = 'COLUMN ' + String(i + 1).padStart(2, '0') + (i === 0 ? ' // REFERENCE' : '');
-    colName.value = c.label || '';
+    // Don't clobber typing when a sync refresh re-runs this.
+    if (document.activeElement !== colName) colName.value = c.label || '';
     colName.placeholder = c.city;
     $('#col-loc').textContent = c.city + ', ' + c.country + ' · ' + c.tz.replace(/_/g, ' ');
     headerField.set(c.headerColor || null, i === 0 ? DEFAULT_REF_HEADER : '#15181c');
     $('#col-remove').disabled = cities.length <= 1;
+    $('#col-remove').hidden = !canManage();
+    $('#col-hide').hidden = !inBoard() || cities.length <= 1;
     $('#col-makeref').hidden = i === 0;
+    $('#col-owner-field').hidden = !(inBoard() && isAdmin());
+    if (!editable) return;
+    if (inBoard() && isAdmin()) {
+      const current = (id) => [...cities, ...sync.hiddenCols].find((o) => o.ownerId === id && o !== c);
+      colOwner.replaceChildren(new Option('Nobody — only you', ''), ...sync.members.map((m) => {
+        const other = current(m.id);
+        return new Option('@' + m.username + (m.isAdmin ? ' (you)' : '') + (other ? ' — moves from ' + displayName(other) : ''), m.id);
+      }));
+      colOwner.value = c.ownerId || '';
+    }
     paintHourButtons();
     paintDayButtons();
   }
@@ -1009,7 +1128,7 @@
     syncColDialog();
     colDialog.showModal();
     // Avoid popping the on-screen keyboard on touch devices.
-    if (matchMedia('(hover: hover)').matches) colName.focus();
+    if (canEdit(cities[i]) && matchMedia('(hover: hover)').matches) colName.focus();
   }
 
   // ---------- Status colors ----------
@@ -1172,14 +1291,633 @@
 
   // Sync changes made in another tab.
   window.addEventListener('storage', (e) => {
-    if (e.key === STORAGE_KEY) { cities = loadCities(); renderAll(false); }
+    if (e.key === STORAGE_KEY && !inBoard()) { cities = loadCities(); renderAll(false); }
     if (e.key === SETTINGS_KEY) { settings = loadSettings(); applyColors(); }
+  });
+
+  // ---------- Shared boards ----------
+  // Signed-in friends can switch from this device's private layout to a board
+  // stored on the server. Local edits are diffed against the last server copy
+  // and sent as one debounced request; other people's edits arrive by polling.
+  // Polling slows down when idle and stops while the tab is hidden, which keeps
+  // serverless invocations (and so the hosting bill) small.
+
+  const API = '/api/sync';
+  const SYNC_KEY = 'timediff.sync';
+  const SAVE_DELAY = 800;
+  const POLL_ACTIVE = 20000; // tab visible and in use
+  const POLL_IDLE = 90000; // no interaction for IDLE_AFTER
+  const IDLE_AFTER = 5 * 60000;
+  const SLEEP_AFTER = 30 * 60000; // stop polling until the next interaction
+  const SHARED = ['label', 'schedule', 'workDays', 'ownerId']; // synced to everyone
+
+  const syncBtn = $('#sync-btn');
+  const syncDialog = $('#sync-dialog');
+  const syncInner = $('#sync-inner');
+
+  async function api(op, body, query) {
+    let res, data;
+    try {
+      res = await fetch(API + '?' + new URLSearchParams({ op, ...query }), body ? {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        keepalive: true, // let a final save finish if the tab closes
+      } : undefined);
+      data = await res.json();
+    } catch {
+      throw Object.assign(new Error('Can’t reach the server.'), { status: 0 });
+    }
+    if (!res.ok) throw Object.assign(new Error(data.error || 'Something went wrong.'), { status: res.status });
+    return data;
+  }
+
+  const snap = (c) => JSON.stringify(SHARED.map((k) => c[k] ?? null));
+
+  // This person's view: column order, hidden columns and header colors.
+  function currentView() {
+    const all = [...cities, ...sync.hiddenCols];
+    return {
+      order: all.map((c) => c.id),
+      hidden: sync.hiddenCols.map((c) => c.id),
+      colors: Object.fromEntries(all.filter((c) => c.headerColor).map((c) => [c.id, c.headerColor])),
+      mine: sync.viewMine,
+    };
+  }
+
+  // Arrange a board's columns by this person's saved view.
+  function compose(state) {
+    const cols = state.columns.map(sanitizeCity).filter(Boolean);
+    const view = state.view || { order: [], hidden: [] };
+    sync.viewMine = view.mine || null;
+    const rank = new Map(view.order.map((id, i) => [id, i]));
+    cols.sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity)); // new columns go last
+    for (const c of cols) {
+      const hex = normalizeHex((view.colors || {})[c.id]);
+      if (hex) c.headerColor = hex; else delete c.headerColor;
+    }
+    const hidden = new Set(view.hidden);
+    const visible = cols.filter((c) => !hidden.has(c.id));
+    const hiddenCols = cols.filter((c) => hidden.has(c.id));
+    if (!visible.length && hiddenCols.length) visible.push(hiddenCols.shift());
+    return { visible, hiddenCols };
+  }
+
+  // Your assigned column is your reference: whenever the admin assigns you a
+  // column you didn't have before, it moves to the front of your view (once, so
+  // you can still reorder afterwards).
+  function pinOwn(visible, hiddenCols) {
+    const own = [...visible, ...hiddenCols].find((c) => c.ownerId === sync.user.id);
+    if (own && own.id !== sync.viewMine) {
+      for (const list of [visible, hiddenCols]) if (list.includes(own)) list.splice(list.indexOf(own), 1);
+      visible.unshift(own);
+    }
+    sync.viewMine = own ? own.id : null;
+  }
+
+  function saveSyncCache() {
+    if (!sync.user) { localStorage.removeItem(SYNC_KEY); return; }
+    localStorage.setItem(SYNC_KEY, JSON.stringify({ user: sync.user, boards: sync.boards, state: sync.boardId ? sync.state : null }));
+  }
+
+  const setSyncStatus = (s) => { syncBtn.dataset.state = s; };
+
+  function updateSyncUi() {
+    syncBtn.hidden = $('#sync-sep').hidden = !sync.enabled;
+    $('#sync-label').textContent = sync.boardId ? sync.boardName : sync.user ? 'This device' : 'Sign in';
+    syncBtn.title = sync.boardId ? 'Shared board “' + sync.boardName + '” — click to switch'
+      : sync.user ? 'Showing your private layout — click to open a shared board' : 'Sign in to shared boards';
+    root.classList.toggle('shared', inBoard());
+    root.classList.toggle('has-sync', sync.enabled);
+    if (!inBoard()) setSyncStatus('local');
+  }
+
+  // Take the server's copy of the board. `sent` describes the save that returned
+  // this state ({ cols: id → snapshot, view }); after our own save we keep our
+  // view and anything edited while it was in flight, and only take other
+  // people's changes to shared fields.
+  function adopt(state, sent, render = true) {
+    const key = (vis, hid) => vis.map((c) => c.id + snap(c) + (c.headerColor || '')).join() + '|' + hid.map((c) => c.id).join();
+    const before = key(cities, sync.hiddenCols);
+    let visible, hiddenCols;
+    if (!sent) {
+      ({ visible, hiddenCols } = compose(state));
+    } else {
+      const server = new Map(state.columns.map((c) => [c.id, sanitizeCity(c)]));
+      const merge = (lc) => {
+        const sc = server.get(lc.id);
+        if (!sc) return sent.cols.has(lc.id) ? null : lc; // removed by someone else / added meanwhile
+        if (snap(lc) === sent.cols.get(lc.id)) for (const k of SHARED) { if (sc[k] === undefined) delete lc[k]; else lc[k] = sc[k]; }
+        return lc;
+      };
+      visible = cities.map(merge).filter(Boolean);
+      hiddenCols = sync.hiddenCols.map(merge).filter(Boolean);
+      const known = new Set([...visible, ...hiddenCols].map((c) => c.id));
+      for (const [id, sc] of server) {
+        if (sc && !known.has(id) && !sent.cols.has(id)) { delete sc.headerColor; visible.push(sc); } // added by others
+      }
+      if (!visible.length && hiddenCols.length) visible.push(hiddenCols.shift());
+    }
+    pinOwn(visible, hiddenCols);
+
+    const changed = key(visible, hiddenCols) !== before
+      || sync.boardName !== state.board.name
+      || JSON.stringify(sync.members) !== JSON.stringify(state.members);
+    sync.state = state;
+    sync.version = state.version;
+    sync.boardName = state.board.name;
+    sync.members = state.members;
+    sync.base = new Map(state.columns.map((c) => [c.id, snap(sanitizeCity(c) || {})]));
+    cities = visible;
+    sync.hiddenCols = hiddenCols;
+    sync.baseView = sent ? sent.view : JSON.stringify(currentView());
+    saveSyncCache();
+    if (!render) return;
+    updateSyncUi();
+    if (!changed) return;
+    renderAll(false);
+    if (colDialog.open) { if (editCity()) syncColDialog(); else colDialog.close(); }
+  }
+
+  // What changed locally since the last server copy, or null if nothing.
+  function computeChanges() {
+    const all = [...cities, ...sync.hiddenCols];
+    const ids = new Set(all.map((c) => c.id));
+    const create = [], patch = [];
+    for (const c of all) {
+      const prev = sync.base.get(c.id);
+      if (prev === undefined) { create.push(c); continue; }
+      if (prev === snap(c)) continue;
+      const old = JSON.parse(prev);
+      const p = { id: c.id };
+      SHARED.forEach((k, i) => { if (JSON.stringify(old[i]) !== JSON.stringify(c[k] ?? null)) p[k] = c[k] ?? null; });
+      patch.push(p);
+    }
+    const remove = [...sync.base.keys()].filter((id) => !ids.has(id));
+    const view = JSON.stringify(currentView());
+    const viewChanged = view !== sync.baseView;
+    if (!create.length && !patch.length && !remove.length && !viewChanged) return null;
+    return { create, patch, remove, view: viewChanged ? JSON.parse(view) : undefined };
+  }
+
+  function queueSync(delay = SAVE_DELAY) {
+    sync.dirty = true;
+    setSyncStatus('pending');
+    clearTimeout(sync.saveTimer);
+    sync.saveTimer = setTimeout(flush, delay);
+  }
+
+  async function flush() {
+    clearTimeout(sync.saveTimer);
+    if (!sync.boardId || sync.inflight || !sync.dirty) return;
+    sync.dirty = false;
+    const changes = computeChanges();
+    if (!changes) { setSyncStatus('ok'); return; }
+    const boardId = sync.boardId;
+    const sent = {
+      cols: new Map([...cities, ...sync.hiddenCols].map((c) => [c.id, snap(c)])),
+      view: JSON.stringify(currentView()),
+    };
+    sync.inflight = true;
+    setSyncStatus('saving');
+    try {
+      const state = await api('sync', { boardId, ...changes });
+      if (sync.boardId === boardId) { adopt(state, sent); setSyncStatus('ok'); }
+    } catch (err) {
+      if (sync.boardId === boardId) syncFailed(err, true);
+    } finally {
+      sync.inflight = false;
+    }
+    if (sync.dirty && sync.boardId) queueSync(); // edits made while saving
+  }
+
+  function syncFailed(err, saving) {
+    if (err.status === 401) { signedOut('You were signed out — showing this device’s layout.'); return; }
+    if (err.status === 404) { toast(err.message, true); leaveBoard(); refreshMe().catch(() => {}); return; }
+    setSyncStatus('error');
+    if (saving && (err.status === 0 || err.status === 429 || err.status >= 500)) {
+      toast(err.message + ' Retrying shortly…', true);
+      queueSync(15000); // keep the edits and try again
+      setSyncStatus('error');
+      return;
+    }
+    // Rejected (e.g. no permission): drop the local edits and reload.
+    toast(err.message, true);
+    reloadBoard();
+  }
+
+  async function reloadBoard() {
+    const id = sync.boardId;
+    clearTimeout(sync.saveTimer);
+    sync.dirty = false;
+    try {
+      const state = await api('state', null, { board: id });
+      if (sync.boardId === id) { adopt(state, null); setSyncStatus('ok'); }
+    } catch (err) {
+      if (sync.boardId === id && (err.status === 401 || err.status === 404)) syncFailed(err);
+    }
+  }
+
+  function schedulePoll() {
+    clearTimeout(sync.pollTimer);
+    if (!sync.boardId || document.hidden) return;
+    const idle = Date.now() - sync.lastActive;
+    if (idle > SLEEP_AFTER) return; // resumes on the next interaction
+    sync.pollTimer = setTimeout(poll, idle > IDLE_AFTER ? POLL_IDLE : POLL_ACTIVE);
+  }
+
+  const busyEditing = () => sync.dirty || sync.inflight || !!drag || paintValue !== undefined || !cellMenu.hidden;
+
+  async function poll() {
+    clearTimeout(sync.pollTimer);
+    const id = sync.boardId;
+    if (!id || sync.polling) return;
+    if (busyEditing()) { schedulePoll(); return; }
+    sync.polling = true;
+    sync.lastPoll = Date.now();
+    try {
+      // `since` lets the server answer "unchanged" without reading the board.
+      const state = await api('state', null, { board: id, since: sync.version });
+      if (sync.boardId === id && !state.unchanged && !busyEditing()) adopt(state, null);
+      if (sync.boardId === id && !sync.dirty && !sync.inflight) setSyncStatus('ok');
+    } catch (err) {
+      if (sync.boardId === id) {
+        if (err.status === 401 || err.status === 404) syncFailed(err);
+        else setSyncStatus('error');
+      }
+    } finally {
+      sync.polling = false;
+    }
+    schedulePoll();
+  }
+
+  function pollSoon() {
+    if (sync.boardId && !document.hidden && Date.now() - sync.lastPoll > 10000) poll();
+    else schedulePoll();
+  }
+
+  function markActive() {
+    const idle = Date.now() - sync.lastActive;
+    sync.lastActive = Date.now();
+    if (idle > IDLE_AFTER) pollSoon(); // catch up after being idle
+  }
+  for (const t of ['pointerdown', 'keydown', 'wheel']) window.addEventListener(t, markActive, { capture: true, passive: true });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { clearTimeout(sync.pollTimer); flush(); } else pollSoon();
+  });
+
+  async function openBoard(id) {
+    if (sync.boardId && sync.dirty) await flush();
+    const state = await api('state', null, { board: id });
+    clearTimeout(sync.saveTimer);
+    sync.dirty = false;
+    sync.boardId = id;
+    cities = [];
+    sync.hiddenCols = [];
+    adopt(state, null, false);
+    updateSyncUi();
+    setSyncStatus('ok');
+    renderAll(true);
+    schedulePoll();
+  }
+
+  function leaveBoard() {
+    clearTimeout(sync.saveTimer);
+    clearTimeout(sync.pollTimer);
+    Object.assign(sync, { boardId: null, boardName: '', state: null, members: [], hiddenCols: [], dirty: false });
+    if (colDialog.open) colDialog.close();
+    cities = loadCities();
+    saveSyncCache();
+    updateSyncUi();
+    renderAll(true);
+  }
+
+  function signedOut(message) {
+    sync.user = null;
+    sync.boards = [];
+    if (sync.boardId) leaveBoard();
+    saveSyncCache();
+    updateSyncUi();
+    if (message) toast(message, true);
+  }
+
+  async function refreshMe() {
+    const me = await api('me');
+    sync.enabled = !!me.enabled;
+    sync.user = me.user || null;
+    sync.boards = me.boards || [];
+    saveSyncCache();
+    updateSyncUi();
+    return me;
+  }
+
+  // Show the last known board instantly on load; initSync() then refreshes it.
+  function restoreSyncCache() {
+    try {
+      const c = JSON.parse(localStorage.getItem(SYNC_KEY));
+      if (!c || !c.user) return;
+      Object.assign(sync, { enabled: true, user: c.user, boards: c.boards || [] });
+      if (c.state && c.state.board) {
+        sync.boardId = c.state.board.id;
+        adopt(c.state, null, false);
+        if (!cities.length) { sync.boardId = null; cities = loadCities(); }
+      }
+    } catch { /* ignore a corrupt cache */ }
+  }
+
+  async function initSync() {
+    const invite = new URLSearchParams(location.search).get('invite');
+    if (invite) history.replaceState(null, '', location.pathname);
+    let me;
+    try {
+      me = await refreshMe();
+    } catch {
+      // Offline, or hosted without the API. Keep showing any cached board.
+      sync.enabled = !!sync.user;
+      updateSyncUi();
+      if (sync.boardId) setSyncStatus('error');
+      return;
+    }
+    if (!me.enabled || !me.user) {
+      if (sync.boardId) signedOut(me.enabled ? 'Your session expired — showing this device’s layout.' : '');
+    } else if (sync.boardId) {
+      if (sync.boards.some((b) => b.id === sync.boardId)) poll();
+      else { toast('You no longer have access to “' + sync.boardName + '”.', true); leaveBoard(); }
+    }
+    if (invite && me.enabled) {
+      try {
+        const info = await api('inviteInfo', { token: invite });
+        renderSyncDialog('invite', { token: invite, info });
+        syncDialog.showModal();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+  }
+
+  // ----- Sign-in / boards dialog -----
+
+  let submitAction = null;
+
+  const hint = (text) => el('p', 'field-hint', text);
+  const inlineRow = (...kids) => { const r = el('div', 'inline-row'); r.append(...kids); return r; };
+
+  function group(label, ...kids) {
+    const g = el('div', 'field');
+    g.append(el('span', 'field-label', label), ...kids);
+    return g;
+  }
+
+  function input(attrs) {
+    const i = document.createElement('input');
+    i.className = 'text-input';
+    for (const k in attrs) i[k] = attrs[k];
+    return i;
+  }
+
+  function labeled(label, attrs) {
+    const i = input(attrs);
+    const wrap = el('label', 'field');
+    wrap.append(el('span', 'field-label', label), i);
+    return [wrap, i];
+  }
+
+  function onEnter(i, fn) {
+    i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); fn(); } });
+  }
+
+  function errorLine() {
+    const e = el('p', 'form-error');
+    e.hidden = true;
+    e.setAttribute('role', 'alert');
+    return e;
+  }
+
+  // Run an async action with its button disabled, reporting errors in `errEl`.
+  async function attempt(btn, errEl, fn) {
+    btn.disabled = true;
+    errEl.hidden = true;
+    try {
+      await fn();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function linkBox(url, note) {
+    const i = input({ value: url, readOnly: true });
+    i.addEventListener('focus', () => i.select());
+    const copy = button('btn', 'Copy');
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(url); copy.textContent = 'Copied'; } catch { i.focus(); }
+    });
+    const box = el('div', 'field');
+    box.append(inlineRow(i, copy), hint(note));
+    return box;
+  }
+
+  const inviteUrl = (token) => location.origin + location.pathname + '?invite=' + encodeURIComponent(token);
+
+  function dlgFrame(kicker, title, body, footKids) {
+    const head = el('div', 'dlg-head');
+    const t = el('div');
+    t.append(el('span', 'kicker', kicker), el('h2', null, title));
+    head.append(t, button('icon-btn ghost', '✕', { 'data-close': '', 'aria-label': 'Close' }));
+    const foot = el('div', 'dlg-foot');
+    foot.append(...footKids);
+    syncInner.replaceChildren(head, body, foot);
+  }
+
+  function renderSyncDialog(view, data) {
+    submitAction = null;
+    if (view === 'login') loginView();
+    else if (view === 'invite') inviteView(data.token, data.info);
+    else boardsView();
+  }
+
+  function loginView() {
+    const body = el('div', 'dlg-body');
+    const [userWrap, user] = labeled('Username', { autocomplete: 'username', autocapitalize: 'none', spellcheck: false, maxLength: 40 });
+    const [passWrap, pass] = labeled('Password', { type: 'password', autocomplete: 'current-password', maxLength: 200 });
+    const err = errorLine();
+    body.append(userWrap, passWrap, err,
+      hint('Shared boards are invite-only — ask whoever runs this site for an invite link. Without signing in, everything stays on this device.'));
+    const go = button('btn primary', 'Sign in');
+    go.type = 'submit';
+    submitAction = () => attempt(go, err, async () => {
+      await api('login', { username: user.value.trim(), password: pass.value });
+      await refreshMe();
+      // Friends with a single board go straight to it.
+      if (!isAdmin() && sync.boards.length === 1) {
+        await openBoard(sync.boards[0].id);
+        syncDialog.close();
+        return;
+      }
+      renderSyncDialog('boards');
+    });
+    dlgFrame('SYNC', 'Sign in', body, [el('span', 'spacer'), go]);
+    setTimeout(() => user.focus());
+  }
+
+  function inviteView(token, info) {
+    const reset = !!info.username;
+    const body = el('div', 'dlg-body');
+    let user = null;
+    if (!reset) {
+      const [w, i] = labeled('Username', { autocomplete: 'username', autocapitalize: 'none', spellcheck: false, maxLength: 24 });
+      body.append(w);
+      user = i;
+    }
+    const [passWrap, pass] = labeled(reset ? 'New password' : 'Password', { type: 'password', autocomplete: reset ? 'new-password' : 'current-password', maxLength: 200 });
+    const err = errorLine();
+    body.append(passWrap, err, hint(reset
+      ? 'Choose a new password (8+ characters) for @' + info.username + '.'
+      : 'New here? Pick a username and a password (8+ characters). Already have an account? Enter your existing login to add this board to it.'));
+    const go = button('btn primary', reset ? 'Set password' : 'Join board');
+    go.type = 'submit';
+    submitAction = () => attempt(go, err, async () => {
+      const res = await api('acceptInvite', { token, username: user ? user.value.trim() : undefined, password: pass.value });
+      await refreshMe();
+      if (res.boardId) await openBoard(res.boardId);
+      syncDialog.close();
+      toast(reset ? 'Password updated — you’re signed in.' : 'You’re in! Your column is tagged YOU once the admin assigns it.');
+    });
+    dlgFrame('INVITE', reset ? 'Reset password' : 'Join “' + info.boardName + '”', body, [el('span', 'spacer'), go]);
+    setTimeout(() => (user || pass).focus());
+  }
+
+  function boardsView() {
+    const body = el('div', 'dlg-body');
+    const err = errorLine();
+
+    const list = el('div', 'board-list');
+    const item = (id, name, sub) => {
+      const b = button('board-item' + (sync.boardId === id ? ' active' : ''));
+      b.append(el('span', 'board-name', name), el('span', 'board-sub', sub));
+      b.addEventListener('click', () => attempt(b, err, async () => {
+        if (id !== sync.boardId) { if (id) await openBoard(id); else leaveBoard(); }
+        if (isAdmin()) renderSyncDialog('boards'); else syncDialog.close();
+      }));
+      return b;
+    };
+    list.append(item(null, 'This device', 'Private · stored in this browser only'));
+    for (const b of sync.boards) list.append(item(b.id, b.name, 'Shared board'));
+    body.append(group('Boards', list), err);
+
+    if (isAdmin()) {
+      const name = input({ placeholder: 'Board name', maxLength: 40 });
+      const create = button('btn', 'Create');
+      const doCreate = () => attempt(create, err, async () => {
+        const { board } = await api('createBoard', { name: name.value, columns: cities });
+        await refreshMe();
+        await openBoard(board.id);
+        renderSyncDialog('boards');
+      });
+      create.addEventListener('click', doCreate);
+      onEnter(name, doCreate);
+      body.append(group('New board', inlineRow(name, create), hint('Starts with a copy of the columns you’re looking at now.')));
+    }
+
+    if (isAdmin() && inBoard()) body.append(...boardAdmin(err));
+    if (inBoard()) {
+      body.append(hint((isAdmin() ? '' : 'You can edit the schedule of the column tagged YOU (the admin assigns it). ')
+        + 'Column order, header colors and hidden columns are just your view — drag headers to reorder, or tap ✎ on any column.'));
+    }
+
+    const out = button('btn', 'Sign out');
+    out.addEventListener('click', () => attempt(out, err, async () => {
+      if (sync.dirty) await flush();
+      await api('logout', {});
+      signedOut();
+      renderSyncDialog('login');
+    }));
+    const done = button('btn primary', 'Done', { 'data-close': '' });
+    dlgFrame('SIGNED IN // @' + sync.user.username + (isAdmin() ? ' // ADMIN' : ''), 'Boards', body, [out, el('span', 'spacer'), done]);
+  }
+
+  // Admin tools for the open board: rename, invite, members, delete.
+  function boardAdmin(err) {
+    const boardId = sync.boardId;
+
+    const name = input({ value: sync.boardName, maxLength: 40 });
+    const rename = button('btn', 'Rename');
+    const doRename = () => attempt(rename, err, async () => {
+      await api('renameBoard', { boardId, name: name.value });
+      await refreshMe();
+      await reloadBoard();
+      renderSyncDialog('boards');
+    });
+    rename.addEventListener('click', doRename);
+    onEnter(name, doRename);
+
+    const linkOut = el('div');
+    const invite = button('btn', 'Create invite link');
+    invite.addEventListener('click', () => attempt(invite, err, async () => {
+      const r = await api('createInvite', { boardId });
+      linkOut.replaceChildren(linkBox(inviteUrl(r.token), 'Anyone with this link can join (up to ' + r.uses + ' people, for ' + r.days + ' days). Friends pick their own username and password.'));
+    }));
+
+    const people = el('div', 'member-list');
+    const others = sync.members.filter((m) => !m.isAdmin);
+    if (!others.length) people.append(hint('No one has joined yet — send an invite link.'));
+    for (const m of others) {
+      const row = el('div', 'member-row');
+      const reset = button('text-btn', 'Reset password');
+      reset.addEventListener('click', () => attempt(reset, err, async () => {
+        const r = await api('resetLink', { userId: m.id });
+        linkOut.replaceChildren(linkBox(inviteUrl(r.token), 'Send this to @' + m.username + ' only. It works once, for ' + r.hours + ' hours.'));
+      }));
+      const remove = button('text-btn danger', 'Remove');
+      remove.addEventListener('click', () => {
+        if (!confirm('Remove @' + m.username + ' from “' + sync.boardName + '”? Their columns stay, unassigned.')) return;
+        attempt(remove, err, async () => {
+          await api('removeMember', { boardId, userId: m.id });
+          await reloadBoard();
+          renderSyncDialog('boards');
+        });
+      });
+      row.append(el('span', 'member-name', '@' + m.username), reset, remove);
+      people.append(row);
+    }
+
+    const del = button('btn danger', 'Delete board');
+    del.addEventListener('click', () => {
+      if (!confirm('Delete “' + sync.boardName + '” for everyone? This can’t be undone.')) return;
+      attempt(del, err, async () => {
+        await api('deleteBoard', { boardId });
+        leaveBoard();
+        await refreshMe();
+        renderSyncDialog('boards');
+      });
+    });
+
+    return [
+      group('This board', inlineRow(name, rename)),
+      group('People', people, inlineRow(invite), linkOut,
+        hint('To give someone a column, open its editor (✎) and pick them under “Managed by”. They can then edit only that column.')),
+      inlineRow(del),
+    ];
+  }
+
+  syncBtn.addEventListener('click', () => {
+    renderSyncDialog(sync.user ? 'boards' : 'login');
+    syncDialog.showModal();
+  });
+  syncInner.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (submitAction) submitAction();
   });
 
   // ---------- Go ----------
 
   applyColors();
+  restoreSyncCache();
+  updateSyncUi();
   renderAll(true);
+  initSync();
   (function loop() {
     tick();
     setTimeout(loop, 1000 - (Date.now() % 1000) + 5);

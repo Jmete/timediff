@@ -35,6 +35,10 @@
       </div>
     </div>
     <div class="actions">
+      <button id="sync-btn" class="sync-btn" type="button" hidden title="Shared boards &amp; sign in">
+        <i class="sync-dot" aria-hidden="true"></i><span id="sync-label">Sign in</span>
+      </button>
+      <span class="action-sep" id="sync-sep" hidden aria-hidden="true"></span>
       <button id="export-btn" class="icon-btn" type="button" aria-label="Download config" title="Download config (.json)">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/></svg>
       </button>
@@ -96,20 +100,24 @@
   <dialog id="col-dialog" class="dlg">
     <div class="dlg-inner">
       <div class="dlg-head">
-        <div><span class="kicker" id="col-kicker">COLUMN 01</span><h2>Edit column</h2></div>
+        <div><span class="kicker" id="col-kicker">COLUMN 01</span><h2 id="col-title">Edit column</h2></div>
         <button class="icon-btn ghost" type="button" data-close aria-label="Close">✕</button>
       </div>
       <div class="dlg-body">
-        <label class="field">
+        <label class="field" id="col-name-field">
           <span class="field-label">Display name</span>
           <input id="col-name" class="text-input" type="text" maxlength="40" autocomplete="off" />
           <span class="field-hint" id="col-loc"></span>
         </label>
+        <label class="field" id="col-owner-field" hidden>
+          <span class="field-label">Managed by <em>· only they (and you) can edit this column</em></span>
+          <select id="col-owner" class="text-input"></select>
+        </label>
         <div class="field">
-          <span class="field-label">Header color</span>
+          <span class="field-label">Header color <em id="col-color-hint"></em></span>
           <div id="col-color"></div>
         </div>
-        <div class="field">
+        <div class="field" id="col-sched-field">
           <span class="field-label">Schedule <em>· local time · tap or drag to paint</em></span>
           <div class="brushes" id="brushes" role="radiogroup" aria-label="Paint status"></div>
           <div class="hours" id="hours"></div>
@@ -118,7 +126,7 @@
             <button id="sched-clear" class="text-btn" type="button">Clear all</button>
           </div>
         </div>
-        <div class="field">
+        <div class="field" id="col-days-field">
           <span class="field-label">Work days <em>· work hours are only highlighted on these days; overnight shifts count toward the day they start</em></span>
           <div class="days" id="workdays" role="group" aria-label="Work days"></div>
           <div class="row-btns">
@@ -130,6 +138,7 @@
       <div class="dlg-foot">
         <button id="col-remove" class="btn danger" type="button">Remove</button>
         <span class="spacer"></span>
+        <button id="col-hide" class="btn" type="button" hidden>Hide</button>
         <button id="col-makeref" class="btn" type="button">Make reference</button>
         <button class="btn primary" type="button" data-close>Done</button>
       </div>
@@ -150,6 +159,11 @@
         <button class="btn primary" type="button" data-close>Done</button>
       </div>
     </div>
+  </dialog>
+
+  <!-- Shared boards: sign in, switch boards, admin tools (built by app.js) -->
+  <dialog id="sync-dialog" class="dlg">
+    <form class="dlg-inner" id="sync-inner" method="dialog" novalidate></form>
   </dialog>
 
   <script src="cities.js"></script>
