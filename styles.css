@@ -877,8 +877,12 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   --st-sleep: color-mix(in srgb, var(--cat-sleep) 55%, transparent);
   --st-free: color-mix(in srgb, var(--cat-free) 85%, transparent);
 }
-[data-theme="dark"] { --avail: var(--acid); }
-[data-theme="light"] { --avail: #6f8f00; }
+/* "Everyone available" is a variant of the Free color (so it follows a
+   customized Free): pale mint on dark, deep green on light. It stays clear of
+   the yellow-green acid "now" highlight and of the Free stripes it outlines. */
+[data-theme="dark"] { --avail: color-mix(in srgb, var(--cat-free) 55%, #ffffff); }
+[data-theme="light"] { --avail: color-mix(in srgb, var(--cat-free) 55%, #000000); }
+:root { --avail-ov: color-mix(in srgb, var(--avail) 14%, transparent); }
 
 .viewbar {
   grid-area: view;
@@ -995,7 +999,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   color: var(--muted);
   cursor: help;
 }
-.avail-swatch { width: 14px; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 2px var(--avail); }
+.avail-swatch { width: 14px; height: 14px; border-radius: 2px; box-shadow: inset 0 0 0 2px var(--avail); background: var(--avail-ov); }
 
 .grid[hidden], .cal[hidden], .cal-key[hidden] { display: none !important; }
 /* Week and month fill the board's height */
@@ -1101,8 +1105,9 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
 .st.cat-free { background: var(--st-free); }
 .st.ev { box-shadow: inset 0 3px 0 var(--pink); }
 .wk td.past .stripes { opacity: .45; }
-.wk td.all-free { box-shadow: inset 0 0 0 2px var(--avail); }
+.wk td.all-free { box-shadow: inset 0 0 0 2px var(--avail); background: var(--avail-ov); }
 .wk td.now { box-shadow: inset 0 0 0 2px var(--now-line); background: var(--now-ov); }
+.wk td.now.all-free { box-shadow: inset 0 0 0 2px var(--now-line), inset 0 0 0 4px var(--avail); background: var(--avail-ov); }
 .wk td.menu-open { box-shadow: inset 0 0 0 2px var(--pink); }
 
 /* ---------- Month view: one bar per person per day ---------- */
@@ -1159,6 +1164,7 @@ thead th .mini-btn.danger:hover { background: var(--pink); color: #fff; }
   padding: 0 4px;
   border: 1px solid color-mix(in srgb, var(--avail) 70%, transparent);
   border-radius: 2px;
+  background: var(--avail-ov);
   font-family: var(--mono);
   font-size: 10.5px;
   font-weight: 700;

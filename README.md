@@ -14,8 +14,8 @@ their own column's schedule up to date for everyone.
     column order. Tap a cell to see everyone's local time and status there.
   - **Month** gives each day one bar per person, covering their 24 hours.
   - Both Week and Month outline the hours when **everyone is available**: they
-    are marked *Free*, or have nothing scheduled between 8 AM and 10 PM their
-    time. Month also shows how many of those hours each day has (`✓3H`).
+    are all marked *Free*. Work, busy, sleep and unset hours don't count.
+    Month also shows how many of those hours each day has (`✓3H`).
     Tap a day to open it.
 - **One-off events** override the weekly schedule for a set time, e.g. a
   dentist appointment or a week away. Tap an hour and switch the menu from

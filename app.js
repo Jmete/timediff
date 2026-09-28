@@ -499,9 +499,34 @@
     return { cat: ev ? ev.cat : templateStatus(c, p), ev, p };
   }
 
-  // "Available" for overlap finding: marked Free, or unscheduled during
-  // waking hours (8 AM–10 PM) in their own time zone.
-  const isAvailable = (s) => s.cat === 'free' || (!s.cat && s.p.hour >= 8 && s.p.hour < 22);
+  // "Available" for overlap finding: explicitly marked Free (by the weekly
+  // schedule or a one-off). Work, busy, sleep and unscheduled hours don't count.
+  // The whole hour [t0, t0 + 1h) must be free: any overlapping non-free
+  // event rules it out, and every stretch not covered by a Free event must be
+  // Free in the weekly schedule. A ref hour can span two local hours
+  // (half-hour zones), so the schedule is checked per segment.
+  function isAvailable(c, t0) {
+    const t1 = t0 + HOUR;
+    const cuts = [t0, t1];
+    for (const e of c.events) {
+      if (e.start >= t1) break; // sorted by start
+      if (e.end <= t0) continue;
+      if (e.cat !== 'free') return false;
+      if (e.start > t0) cuts.push(e.start);
+      if (e.end < t1) cuts.push(e.end);
+    }
+    const m = fastParts(t0, c.tz).minute;
+    if (m) cuts.push(t0 + (60 - m) * 60000); // local hour boundary inside the slot
+    cuts.sort((a, b) => a - b);
+    for (let i = 0; i < cuts.length - 1; i++) {
+      const a = cuts[i];
+      if (a === cuts[i + 1]) continue;
+      if (c.events.some((e) => e.start <= a && a < e.end)) continue; // Free one-off
+      if (templateStatus(c, fastParts(a, c.tz)) !== 'free') return false;
+    }
+    return true;
+  }
+  const everyoneFree = (t0) => cities.length > 0 && cities.every((c) => isAvailable(c, t0));
 
   function renderBody(now) {
     const tz = refTz();
@@ -597,7 +622,7 @@
     });
     const meta = el('span', 'key-meta');
     const avail = el('span', 'key-avail');
-    avail.title = 'Everyone is marked Free, or has nothing scheduled between 8 AM and 10 PM their time';
+    avail.title = 'Hours when everyone is marked Free (work, busy, sleep and unset hours don’t count)';
     avail.append(el('i', 'avail-swatch'), 'Everyone available');
     meta.append(el('span', 'key-hint', nav.range === 'week' ? 'Stripes run left → right in this order' : 'Bars run top → bottom in this order'), avail);
     calKey.replaceChildren(people, meta);
@@ -638,13 +663,11 @@
         td.dataset.day = first + d * DAY_MS;
         td.dataset.r = r;
         const bar = el('div', 'stripes');
-        let all = true;
         for (const c of cities) {
           const s = slotStatus(c, t0);
-          if (!isAvailable(s)) all = false;
           bar.append(el('span', 'st' + (s.cat ? ' cat-' + s.cat : '') + (s.ev ? ' ev' : '')));
         }
-        if (all) td.classList.add('all-free');
+        if (everyoneFree(t0)) td.classList.add('all-free');
         if (t0 + HOUR <= nowMs) td.classList.add('past');
         if (t0 <= nowMs && nowMs < t0 + HOUR) { td.classList.add('now'); tr.classList.add('current'); }
         td.append(bar);
@@ -688,7 +711,8 @@
       const end = localToUtc(tz, day + DAY_MS);
       const rows = cities.map((c) => Array.from({ length: 24 }, (_, r) => slotStatus(c, start + r * HOUR)));
       let freeHours = 0;
-      for (let r = 0; r < 24; r++) if (rows.every((row) => isAvailable(row[r]))) freeHours++;
+      const hours = Math.round((end - start) / HOUR); // 23 or 25 on DST days
+      for (let r = 0; r < hours; r++) if (everyoneFree(start + r * HOUR)) freeHours++;
       const events = cities.reduce((n, c) => n + c.events.filter((e) => e.start < end && e.end > start).length, 0);
 
       const cell = button('mo-day' + (new Date(day).getUTCMonth() !== month ? ' other' : '')
@@ -726,10 +750,8 @@
     head.append(el('span', 'menu-name', civilFmt(day, { weekday: 'short', month: 'short', day: 'numeric' })), el('span', 'menu-time', rt.text + ' ' + rt.suffix));
     cellMenu.replaceChildren(head);
 
-    let all = true;
     for (const c of cities) {
       const s = slotStatus(c, t0);
-      if (!isAvailable(s)) all = false;
       const editable = canEdit(c);
       const b = button('menu-item person' + (editable ? '' : ' ro'), null, {
         role: 'menuitem',
@@ -749,7 +771,7 @@
       } else b.setAttribute('aria-disabled', 'true');
       cellMenu.append(b);
     }
-    if (all) cellMenu.append(el('div', 'menu-avail', '✓ Everyone available'));
+    if (everyoneFree(t0)) cellMenu.append(el('div', 'menu-avail', '✓ Everyone available'));
     const open = button('menu-item link', 'Open this day →');
     open.addEventListener('click', () => { closeCellMenu(); setRange('day', day, +td.dataset.r); });
     cellMenu.append(el('div', 'menu-sep'), open);
